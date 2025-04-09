@@ -186,14 +186,51 @@ def retrieve_duo_data(admin_api: duo_client.Admin, output_dir: str) -> Dict[str,
     duo_data["admin_logs"] = get_and_save("admin logs", "get_administrator_log")
     
     # 7. Policies and settings
-    print(f"  {Style.BRIGHT}Section 7/8: Policy configuration")
+    print(f"  {Style.BRIGHT}Section 7/10: Policy configuration")
     duo_data["settings"] = get_and_save("settings", "get_settings")
     duo_data["policies"] = get_and_save("policies", "get_policies")
     
+    # Try to get detailed policy information
+    try:
+        # Get the first policy to analyze in detail
+        if duo_data["policies"] and len(duo_data["policies"]) > 0:
+            policy_id = duo_data["policies"][0].get("policy_id", "")
+            if policy_id:
+                print(f"  - Retrieving detailed policy settings...")
+                duo_data["policy_details"] = get_and_save("policy details", "get_policy_by_id", policy_id)
+    except Exception as e:
+        print(f"    {Fore.YELLOW}Unable to retrieve detailed policy: {str(e)}")
+        duo_data["policy_details"] = []
+    
     # 8. Integrations and applications
-    print(f"  {Style.BRIGHT}Section 8/8: Integrations and applications")
+    print(f"  {Style.BRIGHT}Section 8/10: Integrations and applications")
     duo_data["integrations"] = get_and_save("integrations", "get_integrations")
     duo_data["groups"] = get_and_save("groups", "get_groups")
+    
+    # 9. FIPS and security details
+    print(f"  {Style.BRIGHT}Section 9/10: FIPS and security configuration")
+    
+    # Try to get FIPS status if available
+    try:
+        duo_data["fips_status"] = get_and_save("fips status", "get_fips_status")
+    except Exception as e:
+        print(f"    {Fore.YELLOW}FIPS status endpoint not available: {str(e)}")
+        duo_data["fips_status"] = []
+    
+    # Try to get device posture/trust settings
+    try:
+        duo_data["trusted_endpoints"] = get_and_save("trusted endpoints", "get_trusted_endpoints_config")
+    except Exception as e:
+        print(f"    {Fore.YELLOW}Trusted endpoints endpoint not available: {str(e)}")
+        duo_data["trusted_endpoints"] = []
+    
+    # 10. Session and authentication settings
+    print(f"  {Style.BRIGHT}Section 10/10: Session and authentication settings")
+    try:
+        duo_data["telephony"] = get_and_save("telephony", "get_telephony_credits")
+    except Exception as e:
+        print(f"    {Fore.YELLOW}Telephony endpoint not available: {str(e)}")
+        duo_data["telephony"] = []
     
     print(f"{Fore.GREEN}✅ All Duo data retrieval complete!")
     return duo_data
@@ -430,9 +467,15 @@ def generate_nist_report(auth_analysis: Dict[str, Any], output_dir: str) -> None
             
         f.write("- Document authentication requirements in System Security Plan\n")
 
-def generate_fedramp_report(admins: List[Dict[str, Any]], output_dir: str) -> None:
+def generate_fedramp_report(duo_data: Dict[str, Any], output_dir: str) -> None:
     """Generate FedRAMP compliance report."""
     report_file = f"{output_dir}/compliance_reports/fedramp_compliance_report.txt"
+    
+    # Extract relevant data
+    admins = duo_data.get("admins", [])
+    settings = duo_data.get("settings", {})
+    fips_status = duo_data.get("fips_status", {})
+    trusted_endpoints = duo_data.get("trusted_endpoints", {})
     
     with open(report_file, "w") as f:
         f.write("FEDRAMP COMPLIANCE ASSESSMENT\n")
@@ -467,13 +510,77 @@ def generate_fedramp_report(admins: List[Dict[str, Any]], output_dir: str) -> No
         f.write("✓ Authentication logs: Available through Admin API\n")
         f.write("✓ Administrator activity logs: Available through Admin API\n\n")
         
-        f.write("3. FEDRAMP AUTHORIZATION REQUIREMENTS\n")
+        # Extract session timeout settings if available
+        f.write("3. SESSION MANAGEMENT\n")
+        f.write("-----------------\n")
+        auth_lifetime = settings.get("auth_lifetime", {})
+        if auth_lifetime:
+            f.write(f"Authentication session timeout: {auth_lifetime.get('auth_lifetime', 'Unknown')} seconds\n")
+            f.write(f"Session expiration enforced: {auth_lifetime.get('auth_lifetime_enabled', 'Unknown')}\n\n")
+            
+            # Assess compliance
+            timeout_seconds = auth_lifetime.get('auth_lifetime', 0)
+            is_compliant = timeout_seconds <= 30 * 60  # 30 minutes max for FedRAMP
+            f.write(f"✓ Session timeout compliance: {'YES' if is_compliant else f'NO (exceeds 30 minutes - {timeout_seconds/60:.1f} minutes)'}\n\n")
+        else:
+            f.write("Session timeout settings: Not available\n\n")
+        
+        # FIPS Mode information
+        f.write("4. FIPS COMPLIANCE\n")
+        f.write("----------------\n")
+        if fips_status:
+            fips_enabled = fips_status.get("fips_enabled", False)
+            f.write(f"FIPS mode enabled: {'Yes' if fips_enabled else 'No'}\n")
+            
+            if fips_enabled:
+                f.write("✅ FIPS 140-2 requirements met\n\n")
+            else:
+                f.write("❌ FIPS 140-2 requirements NOT met - FIPS mode is disabled\n\n")
+        else:
+            f.write("FIPS status: Information not available\n")
+            f.write("⚠️ Manual verification needed for FIPS 140-2 compliance\n\n")
+        
+        # Device trust settings
+        f.write("5. DEVICE TRUST ASSESSMENT\n")
+        f.write("-----------------------\n")
+        if trusted_endpoints:
+            enabled = trusted_endpoints.get("enabled", False)
+            f.write(f"Device trust policies enabled: {'Yes' if enabled else 'No'}\n")
+            
+            if enabled:
+                f.write("✅ Device posture assessment in use\n")
+            else:
+                f.write("⚠️ Device posture assessment not enabled\n")
+        else:
+            f.write("Device trust policies: Information not available\n")
+            f.write("⚠️ Manual verification needed for device posture assessment\n\n")
+        
+        f.write("6. FEDRAMP AUTHORIZATION REQUIREMENTS\n")
         f.write("----------------------------------\n")
         f.write("For FedRAMP compliance, you must use Duo Federal with:\n")
         f.write("- FIPS 140-2/140-3 validated cryptographic modules\n")
         f.write("- FedRAMP Moderate or High authorization\n")
         f.write("- US-based support personnel\n\n")
-        f.write("NOTE: Manual verification needed to confirm Duo Federal edition is in use\n")
+        
+        # Overall compliance assessment
+        f.write("OVERALL FEDRAMP COMPLIANCE ASSESSMENT\n")
+        f.write("----------------------------------\n")
+        
+        # Extract key indicators
+        admin_compliant = admin_count <= 5 and has_separation
+        fips_compliant = fips_status.get("fips_enabled", False) if fips_status else False
+        
+        # Provide overall assessment
+        if admin_compliant and fips_compliant:
+            f.write("✅ LIKELY COMPLIANT: Core FedRAMP requirements appear to be met\n")
+        elif fips_compliant:
+            f.write("⚠️ PARTIAL COMPLIANCE: FIPS requirements met, but administrator controls need review\n")
+        elif admin_compliant:
+            f.write("⚠️ PARTIAL COMPLIANCE: Administrator controls in place, but FIPS mode not confirmed\n")
+        else:
+            f.write("❌ NON-COMPLIANT: Multiple FedRAMP requirements not met\n")
+            
+        f.write("\nNOTE: Manual verification still needed to confirm Duo Federal edition is in use\n")
 
 def generate_user_report(user_analysis: Dict[str, Any], output_dir: str) -> None:
     """Generate user enrollment status report."""
@@ -779,7 +886,7 @@ def analyze_compliance(duo_data: Dict[str, Any], output_dir: str) -> None:
     generate_nist_report(auth_analysis, output_dir)
     print(f"  - {Fore.GREEN}NIST SP 800-63B compliance report generated")
     
-    generate_fedramp_report(duo_data.get("admins", []), output_dir)
+    generate_fedramp_report(duo_data, output_dir)
     print(f"  - {Fore.GREEN}FedRAMP compliance report generated")
     
     generate_user_report(user_analysis, output_dir)
