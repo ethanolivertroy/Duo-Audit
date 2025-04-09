@@ -1,6 +1,6 @@
 # Duo Audit
 
-![](https://duo.com/assets/img/duoLogo-web.png)
+![Duo Audit](image.png)
 
 A comprehensive tool for auditing Duo Security configurations against FedRAMP, NIST, and CISA compliance requirements. Using the official Duo Security API client for reliable and accurate compliance assessment.
 
