@@ -25,7 +25,7 @@ Before beginning your evaluation, ensure you have:
 
 1. **Administrative access** to the Duo tenant being evaluated
 2. **API credentials** with appropriate permissions:
-   ```
+   ```bash
    export DUO_API_HOSTNAME="api-12345.duosecurity.com"
    export DUO_INTEGRATION_KEY="your-integration-key"  
    export DUO_SECRET_KEY="your-secret-key"
@@ -35,6 +35,8 @@ Before beginning your evaluation, ensure you have:
    - Web browser for Admin Console access
    - Duo client Python library: `pip install duo_client`
 4. **Documentation** of your organization's security requirements
+
+> **Note:** Sections labeled "API Verification" contain Python code examples using the Duo Admin API Python client (`duo_client`). Ensure you run these examples with Python 3 and have the `duo_client` library installed.
 
 ### Alternative API Retrieval (curl + jq)
 
