@@ -17,6 +17,7 @@ This guide provides a systematic approach to manually evaluate a Duo Security im
 12. [Device Trust Policies](#11-device-trust-policies)
 13. [Federal Subscription Validation](#12-federal-subscription-validation)
 14. [NIST 800-53 Control Matrix](#nist-800-53-control-matrix)
+15. [Security Best Practices](#security-best-practices)
 
 ## Prerequisites
 
@@ -654,6 +655,54 @@ The following matrix maps key Duo settings to NIST 800-53 controls:
 | **SC-28** | Protection of Information at Rest | FIPS compliance | FIPS validation, data protection |
 | **AU-2** | Audit Events | Authentication logs | Log types collected, authentication activity tracking |
 | **CM-8** | Information System Component Inventory | Device management | Device inventory, hardware token tracking |
+
+## Security Best Practices
+
+Below are recommended security best practices to complement the compliance checks above:
+
+### 1. API Key & Secret Management
+- Use a dedicated, least-privilege integration key (read-only or service account) for audits.
+- Store Duo API credentials in a secure vault or excluded `.env` file; rotate keys regularly and document active keys.
+
+### 2. Least Privilege & Admin Roles
+- Map internal roles to Duo built-in admin roles (User Manager, Read-Only Auditor, Help Desk Operator).
+- Restrict Admin Panel access via IP allowlists or VPNs; enforce separation of duties with distinct high-privilege roles.
+- Conduct quarterly reviews of admin role assignments.
+
+### 3. Network & Access Controls
+- Limit Admin Console access to corporate IP ranges via Duo IP restrictions or network firewalls.
+- Use Duo Device Trust or Network Zones to restrict authentication to approved subnets or endpoints.
+
+### 4. MFA & Authentication Policies
+- Audit bypass code generation and usage: who can create codes, number outstanding, frequency of use.
+- Verify no unconditional allow rules or policy exceptions bypassing MFA requirements.
+- Implement adaptive authentication policies (e.g., risk-based step-up, geolocation blocking).
+
+### 5. Device Security & Endpoint Verification
+- Enable and monitor Duo Endpoint Verification to enforce disk encryption, OS patch status, and health checks.
+- Inventory managed vs. unmanaged endpoints; remediate any blind spots.
+
+### 6. Logging, Monitoring & Alerting
+- Forward Duo Admin API logs and authentication logs to your SIEM (e.g., Splunk, Elastic, Datadog) for centralized monitoring.
+- Define key alerts: multiple bypass code events, spikes in failed logins, new high-privilege admin creations.
+- Ensure log retention meets regulatory requirements (e.g., FedRAMP 90 days online; 1 year archived).
+
+### 7. Incident Response & Maturity
+- Document playbooks for critical incidents (e.g., integration key compromise: rotate keys, revoke tokens, re-enroll users).
+- Conduct regular tabletop exercises on MFA bypass, credential compromise, and device breach scenarios.
+
+### 8. Change-Management & Continuous Compliance
+- Schedule quarterly reviews of policies and configurations using this guide; track findings in a standardized log (columns: Control, Status, Risk, Owner, Due Date).
+
+### 9. Integration-Specific Considerations
+- For Duo Unix, AD Connector, or Auth Proxy deployments, verify FIPS/TLS settings and versions in configuration files (e.g., `/etc/duo/pam_duo.conf`), and keep configs under version control.
+- Reference official component docs for up-to-date security recommendations.
+
+### 10. References & Further Reading
+- Duo Service Accounts & API Best Practices: https://duo.com/docs/adminapi
+- Duo Endpoint Verification Admin Guide: https://duo.com/docs/trusted-endpoints
+- Duo Authentication Proxy Security: https://duo.com/docs/authproxy-reference
+- NIST SP 800-53 Control Catalog: https://csrc.nist.gov/projects/800-53
 
 ## Documentation Template
 
