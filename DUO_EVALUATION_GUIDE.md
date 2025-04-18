@@ -35,6 +35,44 @@ Before beginning your evaluation, ensure you have:
    - Duo client Python library: `pip install duo_client`
 4. **Documentation** of your organization's security requirements
 
+### Alternative API Retrieval (curl + jq)
+
+If you prefer not to use the Duo Python client, you can directly interact with the Duo Admin API using `curl` and `jq`. Ensure your environment variables are set:
+
+```bash
+export DUO_API_HOSTNAME="api-12345.duosecurity.com"
+export DUO_INTEGRATION_KEY="your-integration-key"
+export DUO_SECRET_KEY="your-secret-key"
+```
+
+#### Example Commands
+
+```bash
+# Retrieve account summary
+curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
+  "https://${DUO_API_HOSTNAME}/admin/v1/info_summary" | jq . > account_info.json
+
+# Retrieve users (limit to 1000)
+curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
+  "https://${DUO_API_HOSTNAME}/admin/v1/users?limit=1000" | jq . > users.json
+
+# Retrieve authentication devices (phones)
+curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
+  "https://${DUO_API_HOSTNAME}/admin/v1/phones?limit=1000" | jq . > phones.json
+
+# Retrieve hardware tokens
+curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
+  "https://${DUO_API_HOSTNAME}/admin/v1/tokens?limit=1000" | jq . > tokens.json
+
+# Retrieve policies (limit to 1000)
+curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
+  "https://${DUO_API_HOSTNAME}/admin/v1/policies?limit=1000" | jq . > policies.json
+
+# Retrieve settings
+curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
+  "https://${DUO_API_HOSTNAME}/admin/v1/settings" | jq . > settings.json
+```
+
 ## 1. Authentication Methods & Phishing-Resistant MFA
 
 ### Admin Console Steps
@@ -75,6 +113,21 @@ tokens = admin_api.get_tokens()
 with open('tokens.json', 'w') as f:
     json.dump(tokens, f, indent=2)
 ```
+#### Alternative API Retrieval (curl + jq)
+
+```bash
+# Retrieve settings including authentication methods
+curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
+  "https://${DUO_API_HOSTNAME}/admin/v1/settings" | jq . > settings.json
+
+# Retrieve authentication devices (phones)
+curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
+  "https://${DUO_API_HOSTNAME}/admin/v1/phones?limit=1000" | jq . > phones.json
+
+# Retrieve hardware tokens
+curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
+  "https://${DUO_API_HOSTNAME}/admin/v1/tokens?limit=1000" | jq . > tokens.json
+```
 
 ### CISA Compliance Checklist
 - [ ] FIDO2/WebAuthn authenticators are enabled (phishing-resistant)
@@ -107,6 +160,17 @@ admin_logs = admin_api.get_administrator_log()
 with open('admin_logs.json', 'w') as f:
     json.dump(admin_logs, f, indent=2)
 ```
+#### Alternative API Retrieval (curl + jq)
+
+```bash
+# Retrieve administrators
+curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
+  "https://${DUO_API_HOSTNAME}/admin/v1/admins?limit=1000" | jq . > admins.json
+
+# Retrieve administrator logs
+curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
+  "https://${DUO_API_HOSTNAME}/admin/v1/administrator_log?limit=1000" | jq . > admin_logs.json
+```
 
 ### FedRAMP Requirements Checklist
 - [ ] Administrator accounts are limited and follow least privilege
@@ -117,6 +181,40 @@ with open('admin_logs.json', 'w') as f:
 - [ ] Administrator accounts are properly maintained and reviewed
 
 ## 3. FIPS Compliance
+## Duo FIPS Status: API Endpoint Availability
+
+**Summary:**
+Duo Security does not currently provide an Admin API endpoint to programmatically check your Duo deployment’s FIPS status. Calls to methods like `get_fips_status` will fail with:
+```
+FAILED: 'Admin' object has no attribute 'get_fips_status'
+```
+
+---
+
+### Details
+- **No FIPS Status Endpoint:** The official [Duo Admin API documentation][1] lists no FIPS status endpoint.
+- **Script Error Explained:** Attempting to call `get_fips_status` triggers a missing attribute error in the Duo Python client.
+- **FIPS Compliance in Duo:** Determined by Duo Federal edition, OS‑level FIPS mode for components, and supported configurations as per the [Duo Federal Guide][2].
+
+---
+
+### What You Can Do
+- **Manual Verification:** Review your subscription edition (Federal vs. Commercial) and OS FIPS mode for Duo proxies and agents.
+- **Admin Console:** Inspect FIPS settings under your Federal subscription in the Duo Admin Panel.
+- **Script Update:** Remove or comment out `get_fips_status` and related API calls (e.g., `get_trusted_endpoints_config`).
+
+---
+
+### Table: Duo API Capabilities vs. FIPS/Trusted Endpoints
+| Feature                    | API Endpoint Available? | How to Check                      |
+|----------------------------|-------------------------|-----------------------------------|
+| FIPS Compliance            | No                      | Manual/documentation review       |
+| Trusted Endpoints Config   | No (via Admin API)      | Admin Console, documentation      |
+| User/Admin/Policy Retrieval | Yes                    | Duo Admin API                     |
+
+---
+
+### FIPS Compliance
 
 ### Admin Console Steps
 1. Check if it's a Duo Federal instance
@@ -135,10 +233,21 @@ try:
 except:
     print("FIPS status endpoint not available")
 
-# Get account info
+ # Get account info
 info = admin_api.get_info_summary()
 with open('account_info.json', 'w') as f:
     json.dump(info, f, indent=2)
+```
+#### Alternative API Retrieval (curl + jq)
+
+```bash
+# Retrieve FIPS status (if available)
+curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
+  "https://${DUO_API_HOSTNAME}/admin/v1/fips_status" | jq . > fips_status.json
+
+# Retrieve account summary
+curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
+  "https://${DUO_API_HOSTNAME}/admin/v1/info_summary" | jq . > account_info.json
 ```
 
 Additional manual check:
@@ -176,10 +285,25 @@ policies = admin_api.get_policies()
 with open('policies.json', 'w') as f:
     json.dump(policies, f, indent=2)
 
-# Get groups for policy assignment
+ # Get groups for policy assignment
 groups = admin_api.get_groups()
 with open('groups.json', 'w') as f:
     json.dump(groups, f, indent=2)
+```
+#### Alternative API Retrieval (curl + jq)
+
+```bash
+# Retrieve global settings (for policy info)
+curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
+  "https://${DUO_API_HOSTNAME}/admin/v1/settings" | jq . > settings.json
+
+# Retrieve policies
+curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
+  "https://${DUO_API_HOSTNAME}/admin/v1/policies?limit=1000" | jq . > policies.json
+
+# Retrieve groups
+curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
+  "https://${DUO_API_HOSTNAME}/admin/v1/groups?limit=1000" | jq . > groups.json
 ```
 
 ### Policy Checklist
@@ -207,6 +331,13 @@ with open('groups.json', 'w') as f:
 admins = admin_api.get_admins()
 with open('admins.json', 'w') as f:
     json.dump(admins, f, indent=2)
+```
+#### Alternative API Retrieval (curl + jq)
+
+```bash
+# Retrieve administrators
+curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
+  "https://${DUO_API_HOSTNAME}/admin/v1/admins?limit=1000" | jq . > admins.json
 ```
 
 ### Admin Role Checklist
@@ -263,6 +394,13 @@ def analyze_enrollment():
 
 analyze_enrollment()
 ```
+#### Alternative API Retrieval (curl + jq)
+
+```bash
+# Retrieve users
+curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
+  "https://${DUO_API_HOSTNAME}/admin/v1/users?limit=1000" | jq . > users.json
+```
 
 ### User Management Checklist
 - [ ] All active users have MFA enrolled
@@ -311,6 +449,17 @@ def analyze_devices():
 
 analyze_devices()
 ```
+#### Alternative API Retrieval (curl + jq)
+
+```bash
+# Retrieve phones/devices
+curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
+  "https://${DUO_API_HOSTNAME}/admin/v1/phones?limit=1000" | jq . > phones.json
+
+# Retrieve hardware tokens
+curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
+  "https://${DUO_API_HOSTNAME}/admin/v1/tokens?limit=1000" | jq . > tokens.json
+```
 
 ### Device Management Checklist
 - [ ] All devices are properly inventoried
@@ -336,6 +485,13 @@ analyze_devices()
 integrations = admin_api.get_integrations()
 with open('integrations.json', 'w') as f:
     json.dump(integrations, f, indent=2)
+```
+#### Alternative API Retrieval (curl + jq)
+
+```bash
+# Retrieve integrations
+curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
+  "https://${DUO_API_HOSTNAME}/admin/v1/integrations?limit=1000" | jq . > integrations.json
 ```
 
 ### Application Security Checklist
@@ -383,6 +539,14 @@ def analyze_auth_failures():
             f.write(f"- {reason}: {count}\n")
 
 analyze_auth_failures()
+```
+#### Alternative API Retrieval (curl + jq)
+
+```bash
+# Retrieve authentication logs for past 30 days
+MINTIME=$(($(date +%s) - 30*24*60*60))
+curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
+  "https://${DUO_API_HOSTNAME}/admin/v1/authentication_log?mintime=${MINTIME}&limit=1000" | jq . > auth_logs.json
 ```
 
 ### Monitoring Checklist
@@ -518,3 +682,6 @@ Compile your findings into a comprehensive compliance report that includes:
 - [FedRAMP Compliance](https://www.fedramp.gov/)
 - [Duo Federal Documentation](https://duo.com/solutions/government)
 - [NIST FIPS 140-2/140-3](https://csrc.nist.gov/Projects/cryptographic-module-validation-program)
+
+[1]: https://duo.com/docs/adminapi
+[2]: https://duo.com/docs/duo-federal-guide

@@ -67,15 +67,15 @@ SCRIPT_DATE = "2025-04-09"
 
 def print_banner():
     """Display a stylish banner for the script."""
-    banner = f"""
- ____              _____  _____  ____   ____       _       _   _ 
-|  _ \\ _   _  ___ / ____|/ ____|/ __ \\ / __ \\     | |     | | | |
-| | | | | | |/ _ \\ |  __| |  __| |  | | |  | |    | |     | | | |
-| | | | | | | (_) | | |_ | | |_ | |  | | |  | |_   | |     | | | |
-| |_| | |_| |\\___/| |__| | |__| | |__| | |__| | |__| |     | | | |
-|____/ \\__,_|      \\_____|\\_____|\\____/ \\____/ \\____/      |_| |_|
-                                                                  
-{Fore.CYAN}MFA Compliance Assessment Script v{SCRIPT_VERSION}
+    banner = rf"""
+ _______   __    __    ______           ___      __    __   _______   __  .___________.
+|       \ |  |  |  |  /  __  \         /   \    |  |  |  | |       \ |  | |           |
+|  .--.  ||  |  |  | |  |  |  |       /  ^  \   |  |  |  | |  .--.  ||  | `---|  |----`
+|  |  |  ||  |  |  | |  |  |  |      /  /_\  \  |  |  |  | |  |  |  ||  |     |  |
+|  '--'  ||  `--'  | |  `--'  |     /  _____  \ |  `--'  | |  '--'  ||  |     |  |
+|_______/  \______/   \______/     /__/     \__\ \______/  |_______/ |__|     |__|
+
+{Fore.CYAN}Duo Audit v{SCRIPT_VERSION}
 {Fore.CYAN}FedRAMP | NIST SP 800-63B | CISA Directives
 """
     print(banner)
@@ -188,7 +188,7 @@ def retrieve_duo_data(admin_api: duo_client.Admin, output_dir: str) -> Dict[str,
     # 7. Policies and settings
     print(f"  {Style.BRIGHT}Section 7/10: Policy configuration")
     duo_data["settings"] = get_and_save("settings", "get_settings")
-    duo_data["policies"] = get_and_save("policies", "get_policies")
+    duo_data["policies"] = get_and_save("policies", "get_policies_v2")
     
     # Try to get detailed policy information
     try:
@@ -197,7 +197,7 @@ def retrieve_duo_data(admin_api: duo_client.Admin, output_dir: str) -> Dict[str,
             policy_id = duo_data["policies"][0].get("policy_id", "")
             if policy_id:
                 print(f"  - Retrieving detailed policy settings...")
-                duo_data["policy_details"] = get_and_save("policy details", "get_policy_by_id", policy_id)
+                duo_data["policy_details"] = get_and_save("policy details", "get_policy_v2", policy_id)
     except Exception as e:
         print(f"    {Fore.YELLOW}Unable to retrieve detailed policy: {str(e)}")
         duo_data["policy_details"] = []
@@ -210,24 +210,18 @@ def retrieve_duo_data(admin_api: duo_client.Admin, output_dir: str) -> Dict[str,
     # 9. FIPS and security details
     print(f"  {Style.BRIGHT}Section 9/10: FIPS and security configuration")
     
-    # Try to get FIPS status if available
-    try:
-        duo_data["fips_status"] = get_and_save("fips status", "get_fips_status")
-    except Exception as e:
-        print(f"    {Fore.YELLOW}FIPS status endpoint not available: {str(e)}")
-        duo_data["fips_status"] = []
+    # FIPS status via API is not available; manual verification required
+    print(f"  {Fore.YELLOW}⚠️ FIPS status endpoint not available via Admin API; please verify FIPS compliance manually (see Duo Federal Guide)")
+    duo_data["fips_status"] = []
     
-    # Try to get device posture/trust settings
-    try:
-        duo_data["trusted_endpoints"] = get_and_save("trusted endpoints", "get_trusted_endpoints_config")
-    except Exception as e:
-        print(f"    {Fore.YELLOW}Trusted endpoints endpoint not available: {str(e)}")
-        duo_data["trusted_endpoints"] = []
+    # Trusted endpoints config via API is not available; manual verification required
+    print(f"  {Fore.YELLOW}⚠️ Trusted endpoints API not available via Admin API; please verify configuration manually via Admin Console")
+    duo_data["trusted_endpoints"] = []
     
     # 10. Session and authentication settings
     print(f"  {Style.BRIGHT}Section 10/10: Session and authentication settings")
     try:
-        duo_data["telephony"] = get_and_save("telephony", "get_telephony_credits")
+        duo_data["telephony"] = get_and_save("telephony", "get_info_telephony_credits_used")
     except Exception as e:
         print(f"    {Fore.YELLOW}Telephony endpoint not available: {str(e)}")
         duo_data["telephony"] = []

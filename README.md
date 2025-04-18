@@ -41,6 +41,45 @@ pip install -r requirements.txt
 ./duo-audit.py --output-dir /path/to/output
 ```
 
+## Duo FIPS Status: API Endpoint Availability
+
+**Summary:**
+Duo Security does not provide an Admin API endpoint to programmatically check your deployment’s FIPS compliance. Attempts to call methods like `get_fips_status` will fail with:
+```
+FAILED: 'Admin' object has no attribute 'get_fips_status'
+```
+
+---
+
+### Details
+- **No FIPS Status Endpoint:** The official [Duo Admin API documentation][1] does not list any FIPS status endpoint. Available endpoints cover user, admin, device, log, policy, and integration management.
+- **Script Error Explained:** The script error indicates attempting to call a non‑existent method (`get_fips_status`) in the Duo API Python client or underlying API.
+- **FIPS Compliance in Duo:** FIPS compliance is managed via:
+  - Use of Duo Federal editions
+  - OS‑level FIPS mode for Duo components (Authentication Proxy, Unix integration, etc.)
+  - Supported versions and configurations
+
+---
+
+### What You Can Do
+- **Manual Verification:** Review your Duo deployment settings and edition (Federal vs. Commercial), and verify OS FIPS mode as described in the [Duo Federal Guide][2].
+- **Administrative Console:** Check FIPS configuration and module validation under your Federal subscription settings.
+- **Script Adjustment:** Remove or comment out calls to `get_fips_status` and `get_trusted_endpoints_config` in your custom scripts.
+
+---
+
+### Table: Duo API vs. FIPS/Trusted Endpoints
+| Feature                   | API Endpoint Available? | How to Check                         |
+|---------------------------|-------------------------|--------------------------------------|
+| FIPS Compliance           | No                      | Manual/documentation review          |
+| Trusted Endpoints Config  | No                      | Admin Console, documentation         |
+| User/Admin/Policy Retrieval | Yes                   | Admin API                            |
+
+---
+
+[1]: https://duo.com/docs/adminapi
+[2]: https://duo.com/docs/duo-federal-guide
+
 You will be prompted for your Duo Admin API credentials if not provided as arguments.
 
 ## Compliance Standards Assessed

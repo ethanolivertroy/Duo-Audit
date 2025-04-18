@@ -1,0 +1,46 @@
+# Environment variables
+.env
+
+# Duo Audit output directories and archives
+duo_compliance_audit_*/
+duo_compliance_audit_*.zip
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.env/
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# IDE and editor directories
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Logs and databases
+*.log
+*.sqlite3
+
+# Test and coverage
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+
+# macOS filesystem artifacts
+.DS_Store
