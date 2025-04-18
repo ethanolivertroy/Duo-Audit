@@ -41,19 +41,16 @@ pip install -r requirements.txt
 ./duo-audit.py --output-dir /path/to/output
 ```
 
-## Duo FIPS Status: API Endpoint Availability
+## Note on FIPS & Trusted Endpoints
 
 **Summary:**
-Duo Security does not provide an Admin API endpoint to programmatically check your deployment’s FIPS compliance. Attempts to call methods like `get_fips_status` will fail with:
-```
-FAILED: 'Admin' object has no attribute 'get_fips_status'
-```
+FIPS status and trusted endpoints API methods are not available in the Duo Admin API client. During execution, the script skips these checks and prints warnings for manual verification.
 
 ---
 
 ### Details
 - **No FIPS Status Endpoint:** The official [Duo Admin API documentation][1] does not list any FIPS status endpoint. Available endpoints cover user, admin, device, log, policy, and integration management.
-- **Script Error Explained:** The script error indicates attempting to call a non‑existent method (`get_fips_status`) in the Duo API Python client or underlying API.
+- **Missing API Methods:** FIPS status and trusted endpoints API methods are not available in the Duo Admin API client. The script automatically skips these checks and issues warnings for manual verification.
 - **FIPS Compliance in Duo:** FIPS compliance is managed via:
   - Use of Duo Federal editions
   - OS‑level FIPS mode for Duo components (Authentication Proxy, Unix integration, etc.)
@@ -64,7 +61,7 @@ FAILED: 'Admin' object has no attribute 'get_fips_status'
 ### What You Can Do
 - **Manual Verification:** Review your Duo deployment settings and edition (Federal vs. Commercial), and verify OS FIPS mode as described in the [Duo Federal Guide][2].
 - **Administrative Console:** Check FIPS configuration and module validation under your Federal subscription settings.
-- **Script Adjustment:** Remove or comment out calls to `get_fips_status` and `get_trusted_endpoints_config` in your custom scripts.
+- **Automated Handling:** The script now automatically skips unavailable FIPS and trusted‐endpoints API calls and issues warnings prompting manual verification.
 
 ---
 
