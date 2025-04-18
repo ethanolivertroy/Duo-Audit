@@ -226,37 +226,6 @@ FAILED: 'Admin' object has no attribute 'get_fips_status'
 4. Verify hardware tokens in use are FIPS validated
 5. Check TLS settings and cipher suites
 
-### API and Manual Verification
-```python
-# Check FIPS status if available
-try:
-    fips_status = admin_api.get_fips_status()
-    with open('fips_status.json', 'w') as f:
-        json.dump(fips_status, f, indent=2)
-except:
-    print("FIPS status endpoint not available")
-
- # Get account info
-info = admin_api.get_info_summary()
-with open('account_info.json', 'w') as f:
-    json.dump(info, f, indent=2)
-```
-#### Alternative API Retrieval (curl + jq)
-
-```bash
-# Retrieve FIPS status (if available)
-curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
-  "https://${DUO_API_HOSTNAME}/admin/v1/fips_status" | jq . > fips_status.json
-
-# Retrieve account summary
-curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
-  "https://${DUO_API_HOSTNAME}/admin/v1/info_summary" | jq . > account_info.json
-```
-
-Additional manual check:
-1. Verify Duo Federal authentication (URLs may contain federal indicators)
-2. Contact your Duo representative to confirm FedRAMP environment and FIPS status
-3. Verify hardware token models against NIST's validated products list: https://csrc.nist.gov/projects/cryptographic-module-validation-program/validated-modules
 
 ### FIPS Compliance Checklist
 - [ ] Using Duo Federal for FedRAMP compliance
