@@ -31,8 +31,11 @@ import getpass
 import datetime
 import zipfile
 import argparse
+import logging
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Union, Tuple
+from functools import wraps
+from time import sleep
 
 try:
     import duo_client
@@ -62,8 +65,122 @@ except ImportError:
     HAS_TABULATE = False
 
 # Script version information
-SCRIPT_VERSION = "1.0.0"
-SCRIPT_DATE = "2025-04-09"
+SCRIPT_VERSION = "1.1.0"
+SCRIPT_DATE = "2025-06-03"
+
+# API Rate limiting settings
+MAX_RETRIES = 3
+INITIAL_RETRY_DELAY = 1  # seconds
+BACKOFF_FACTOR = 2
+RATE_LIMIT_DELAY = 60  # seconds to wait when rate limited
+API_CALL_DELAY = 0.1  # seconds between API calls to avoid hitting rate limits
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+def retry_with_backoff(max_retries: int = MAX_RETRIES, 
+                      initial_delay: float = INITIAL_RETRY_DELAY,
+                      backoff_factor: float = BACKOFF_FACTOR):
+    """Decorator to retry API calls with exponential backoff."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            delay = initial_delay
+            
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except duo_client.DuoException as e:
+                    last_exception = e
+                    error_msg = str(e)
+                    
+                    # Check for rate limiting (various error messages)
+                    if any(indicator in error_msg.lower() for indicator in 
+                          ["rate limit", "429", "too many requests", "quota exceeded"]):
+                        wait_time = RATE_LIMIT_DELAY
+                        # Try to extract wait time from error message if available
+                        import re
+                        wait_match = re.search(r'(\d+)\s*seconds?', error_msg)
+                        if wait_match:
+                            wait_time = int(wait_match.group(1)) + 5  # Add 5 seconds buffer
+                        
+                        logger.warning(f"Rate limit hit. Waiting {wait_time} seconds...")
+                        print(f"{Fore.YELLOW}⚠️  Rate limit reached. Waiting {wait_time} seconds before retrying...")
+                        sleep(wait_time)
+                        continue
+                    
+                    # For other errors, use exponential backoff
+                    if attempt < max_retries - 1:
+                        logger.warning(f"API call failed (attempt {attempt + 1}/{max_retries}): {error_msg}")
+                        logger.info(f"Retrying in {delay} seconds...")
+                        sleep(delay)
+                        delay *= backoff_factor
+                    else:
+                        logger.error(f"API call failed after {max_retries} attempts: {error_msg}")
+                except Exception as e:
+                    last_exception = e
+                    if attempt < max_retries - 1:
+                        logger.warning(f"Unexpected error (attempt {attempt + 1}/{max_retries}): {str(e)}")
+                        sleep(delay)
+                        delay *= backoff_factor
+                    else:
+                        logger.error(f"Unexpected error after {max_retries} attempts: {str(e)}")
+            
+            raise last_exception
+        return wrapper
+    return decorator
+
+def validate_api_response(data: Any, expected_type: type = None, required_fields: List[str] = None) -> Any:
+    """Validate and sanitize API response data."""
+    if data is None:
+        logger.warning("Received None response from API")
+        return [] if expected_type == list else {}
+    
+    # Type validation
+    if expected_type and not isinstance(data, expected_type):
+        logger.warning(f"Expected {expected_type.__name__} but got {type(data).__name__}")
+        return [] if expected_type == list else {}
+    
+    # For list responses, validate each item
+    if isinstance(data, list):
+        validated_items = []
+        for item in data:
+            if isinstance(item, dict):
+                # Sanitize dict items
+                sanitized_item = {k: v for k, v in item.items() if v is not None}
+                validated_items.append(sanitized_item)
+            else:
+                validated_items.append(item)
+        return validated_items
+    
+    # For dict responses, check required fields
+    if isinstance(data, dict):
+        if required_fields:
+            missing_fields = [field for field in required_fields if field not in data]
+            if missing_fields:
+                logger.warning(f"Missing required fields: {missing_fields}")
+        
+        # Sanitize dict - remove None values
+        return {k: v for k, v in data.items() if v is not None}
+    
+    return data
+
+def safe_get(data: Union[Dict, List], key: Union[str, int], default: Any = None) -> Any:
+    """Safely get a value from a dict or list with a default."""
+    try:
+        if isinstance(data, dict):
+            return data.get(key, default)
+        elif isinstance(data, list) and isinstance(key, int):
+            return data[key] if 0 <= key < len(data) else default
+        else:
+            return default
+    except (KeyError, IndexError, TypeError):
+        return default
 
 def print_banner():
     """Display a stylish banner for the script."""
@@ -77,6 +194,7 @@ def print_banner():
 
 {Fore.CYAN}Duo Audit v{SCRIPT_VERSION}
 {Fore.CYAN}FedRAMP | NIST SP 800-63B | CISA Directives
+{Fore.CYAN}Enhanced with retry logic and data validation
 """
     print(banner)
 
@@ -91,22 +209,32 @@ def get_credentials() -> Tuple[str, str, str]:
         print(f"{Fore.RED}Error: Missing Duo credentials.")
         sys.exit(1)
     
+    # Basic hostname validation
+    import re
+    if not re.match(r'^api-[a-zA-Z0-9]+\.duosecurity\.com$', host):
+        print(f"{Fore.YELLOW}Warning: Hostname doesn't match expected pattern (api-xxxx.duosecurity.com)")
+        print(f"{Fore.YELLOW}Proceeding anyway, but please verify your hostname is correct.")
+    
     return host, ikey, skey
 
 def create_admin_client(host: str, ikey: str, skey: str) -> duo_client.Admin:
     """Create and return a Duo Admin API client."""
     return duo_client.Admin(ikey=ikey, skey=skey, host=host)
 
+@retry_with_backoff()
 def test_connection(admin_api: duo_client.Admin) -> bool:
     """Test the connection to the Duo Admin API."""
     print(f"\n{Fore.CYAN}Testing Duo Admin API connection...")
     try:
         # Try to get a single user to verify connection
-        admin_api.get_users(limit=1)
+        result = admin_api.get_users(limit=1)
+        # Validate the response
+        validate_api_response(result, expected_type=list)
         print(f"{Fore.GREEN}✅ Duo Admin API connection successful!")
         return True
     except Exception as e:
         print(f"{Fore.RED}❌ Failed to connect to Duo Admin API: {str(e)}")
+        logger.error(f"Connection test failed: {str(e)}")
         return False
 
 def setup_output_dirs(base_dir: str = None) -> str:
@@ -137,12 +265,22 @@ def retrieve_duo_data(admin_api: duo_client.Admin, output_dir: str) -> Dict[str,
     # Data structure to hold all retrieved information
     duo_data = {}
     
-    # Helper function to get and save API data
+    # Helper function to get and save API data with retry and validation
+    @retry_with_backoff()
     def get_and_save(endpoint_name: str, method_name: str, *args, **kwargs) -> Any:
         print(f"  - Retrieving {endpoint_name}...")
         try:
             method = getattr(admin_api, method_name)
             data = method(*args, **kwargs)
+            
+            # Validate the response based on endpoint type
+            if endpoint_name in ["users", "admins", "phones", "tokens", "auth logs", "admin logs", 
+                               "integrations", "groups", "policies"]:
+                data = validate_api_response(data, expected_type=list)
+            elif endpoint_name in ["account info", "settings", "policy details", "telephony"]:
+                data = validate_api_response(data, expected_type=dict)
+            else:
+                data = validate_api_response(data)
             
             # Save to file
             filename = f"{data_dir}/{endpoint_name.lower().replace(' ', '_')}.json"
@@ -150,14 +288,19 @@ def retrieve_duo_data(admin_api: duo_client.Admin, output_dir: str) -> Dict[str,
                 json.dump(data, f, indent=2)
             
             print(f"    {Fore.GREEN}SUCCESS")
+            # Add small delay between API calls to avoid rate limits
+            sleep(API_CALL_DELAY)
             return data
         except Exception as e:
             print(f"    {Fore.RED}FAILED: {str(e)}")
+            logger.error(f"Failed to retrieve {endpoint_name}: {str(e)}")
             # Save empty data to maintain file structure
             filename = f"{data_dir}/{endpoint_name.lower().replace(' ', '_')}.json"
             with open(filename, "w") as f:
-                json.dump([], f)
-            return []
+                json.dump([] if endpoint_name in ["users", "admins", "phones", "tokens", "auth logs", 
+                                                 "admin logs", "integrations", "groups", "policies"] else {}, f)
+            return [] if endpoint_name in ["users", "admins", "phones", "tokens", "auth logs", 
+                                         "admin logs", "integrations", "groups", "policies"] else {}
     
     # 1. Account info
     print(f"  {Style.BRIGHT}Section 1/8: Account configuration")
@@ -231,7 +374,8 @@ def retrieve_duo_data(admin_api: duo_client.Admin, output_dir: str) -> Dict[str,
 
 def analyze_auth_methods(auth_logs: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Analyze authentication methods used."""
-    if not auth_logs:
+    if not auth_logs or not isinstance(auth_logs, list):
+        logger.warning("No authentication logs available for analysis")
         return {
             "total_auths": 0,
             "methods": [],
@@ -244,7 +388,9 @@ def analyze_auth_methods(auth_logs: List[Dict[str, Any]]) -> Dict[str, Any]:
     # Count methods
     method_counts = {}
     for log in auth_logs:
-        factor = log.get("factor", "unknown")
+        if not isinstance(log, dict):
+            continue
+        factor = safe_get(log, "factor", "unknown")
         method_counts[factor] = method_counts.get(factor, 0) + 1
     
     # Calculate totals and percentages
@@ -288,7 +434,8 @@ def analyze_auth_methods(auth_logs: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def analyze_users(users: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Analyze user enrollment status."""
-    if not users:
+    if not users or not isinstance(users, list):
+        logger.warning("No user data available for analysis")
         return {
             "total_users": 0,
             "unenrolled_users": [],
@@ -303,26 +450,34 @@ def analyze_users(users: List[Dict[str, Any]]) -> Dict[str, Any]:
     # Users without MFA methods
     unenrolled = []
     for user in users:
-        if (user.get("status") == "active" and 
-            len(user.get("phones", [])) == 0 and 
-            len(user.get("tokens", [])) == 0):
+        if not isinstance(user, dict):
+            continue
+        if (safe_get(user, "status") == "active" and 
+            len(safe_get(user, "phones", [])) == 0 and 
+            len(safe_get(user, "tokens", [])) == 0):
             unenrolled.append(user)
     
     # Users with bypass codes
     users_with_bypass = []
     for user in users:
-        if len(user.get("bypass_codes", [])) > 0:
+        if not isinstance(user, dict):
+            continue
+        bypass_codes = safe_get(user, "bypass_codes", [])
+        if isinstance(bypass_codes, list) and len(bypass_codes) > 0:
             users_with_bypass.append(user)
     
     # Users with hardware tokens
     users_with_hardware = []
     for user in users:
-        if len(user.get("tokens", [])) > 0:
+        if not isinstance(user, dict):
+            continue
+        tokens = safe_get(user, "tokens", [])
+        if isinstance(tokens, list) and len(tokens) > 0:
             users_with_hardware.append(user)
     
     # Active/disabled users
-    active_users = len([u for u in users if u.get("status") == "active"])
-    disabled_users = len([u for u in users if u.get("status") == "disabled"])
+    active_users = len([u for u in users if isinstance(u, dict) and safe_get(u, "status") == "active"])
+    disabled_users = len([u for u in users if isinstance(u, dict) and safe_get(u, "status") == "disabled"])
     
     return {
         "total_users": total,
@@ -483,17 +638,27 @@ def generate_fedramp_report(duo_data: Dict[str, Any], output_dir: str) -> None:
         f.write(f"Administrator Count: {admin_count}\n\n")
         
         f.write("Administrator Details:\n")
-        for admin in sorted(admins, key=lambda x: x.get('name', '')):
-            f.write(f"- {admin.get('name', 'Unknown')} ({admin.get('email', 'No email')})\n")
-            f.write(f"  • Role: {admin.get('role', 'Unknown')}\n")
-            f.write(f"  • Status: {admin.get('status', 'Unknown')}\n")
-            f.write(f"  • 2FA Enrolled: {'Yes' if admin.get('email_verified', False) else 'No'}\n")
+        for admin in sorted(admins, key=lambda x: safe_get(x, 'name', '')):
+            name = safe_get(admin, 'name', 'Unknown')
+            email = safe_get(admin, 'email', 'No email')
+            role = safe_get(admin, 'role', 'Unknown')
+            status = safe_get(admin, 'status', 'Unknown')
+            email_verified = safe_get(admin, 'email_verified', False)
+            f.write(f"- {name} ({email})\n")
+            f.write(f"  • Role: {role}\n")
+            f.write(f"  • Status: {status}\n")
+            f.write(f"  • 2FA Enrolled: {'Yes' if email_verified else 'No'}\n")
         
         f.write("\nFedRAMP Requirements Assessment:\n")
         f.write(f"✓ Minimum number of administrators: {'YES' if admin_count <= 5 else f'NO (too many - {admin_count})'}\n")
         
         # Check for separation of duties (different admin roles)
-        admin_roles = set(admin.get('role', '') for admin in admins)
+        admin_roles = set()
+        for admin in admins:
+            if isinstance(admin, dict):
+                role = safe_get(admin, 'role', '')
+                if role:
+                    admin_roles.add(role)
         has_separation = len(admin_roles) > 1
         f.write(f"✓ Separation of duties: {'YES' if has_separation else 'NO (all admins have same role)'}\n\n")
         
@@ -507,23 +672,28 @@ def generate_fedramp_report(duo_data: Dict[str, Any], output_dir: str) -> None:
         # Extract session timeout settings if available
         f.write("3. SESSION MANAGEMENT\n")
         f.write("-----------------\n")
-        auth_lifetime = settings.get("auth_lifetime", {})
-        if auth_lifetime:
-            f.write(f"Authentication session timeout: {auth_lifetime.get('auth_lifetime', 'Unknown')} seconds\n")
-            f.write(f"Session expiration enforced: {auth_lifetime.get('auth_lifetime_enabled', 'Unknown')}\n\n")
+        auth_lifetime = safe_get(settings, "auth_lifetime", {})
+        if auth_lifetime and isinstance(auth_lifetime, dict):
+            timeout_value = safe_get(auth_lifetime, 'auth_lifetime', 'Unknown')
+            timeout_enabled = safe_get(auth_lifetime, 'auth_lifetime_enabled', 'Unknown')
+            f.write(f"Authentication session timeout: {timeout_value} seconds\n")
+            f.write(f"Session expiration enforced: {timeout_enabled}\n\n")
             
             # Assess compliance
-            timeout_seconds = auth_lifetime.get('auth_lifetime', 0)
-            is_compliant = timeout_seconds <= 30 * 60  # 30 minutes max for FedRAMP
-            f.write(f"✓ Session timeout compliance: {'YES' if is_compliant else f'NO (exceeds 30 minutes - {timeout_seconds/60:.1f} minutes)'}\n\n")
+            try:
+                timeout_seconds = int(timeout_value) if timeout_value != 'Unknown' else 0
+                is_compliant = timeout_seconds > 0 and timeout_seconds <= 30 * 60  # 30 minutes max for FedRAMP
+                f.write(f"✓ Session timeout compliance: {'YES' if is_compliant else f'NO (exceeds 30 minutes - {timeout_seconds/60:.1f} minutes)'}\n\n")
+            except (ValueError, TypeError):
+                f.write("✓ Session timeout compliance: Unable to assess (invalid timeout value)\n\n")
         else:
             f.write("Session timeout settings: Not available\n\n")
         
         # FIPS Mode information
         f.write("4. FIPS COMPLIANCE\n")
         f.write("----------------\n")
-        if fips_status:
-            fips_enabled = fips_status.get("fips_enabled", False)
+        if fips_status and isinstance(fips_status, dict):
+            fips_enabled = safe_get(fips_status, "fips_enabled", False)
             f.write(f"FIPS mode enabled: {'Yes' if fips_enabled else 'No'}\n")
             
             if fips_enabled:
@@ -537,8 +707,8 @@ def generate_fedramp_report(duo_data: Dict[str, Any], output_dir: str) -> None:
         # Device trust settings
         f.write("5. DEVICE TRUST ASSESSMENT\n")
         f.write("-----------------------\n")
-        if trusted_endpoints:
-            enabled = trusted_endpoints.get("enabled", False)
+        if trusted_endpoints and isinstance(trusted_endpoints, dict):
+            enabled = safe_get(trusted_endpoints, "enabled", False)
             f.write(f"Device trust policies enabled: {'Yes' if enabled else 'No'}\n")
             
             if enabled:
@@ -562,7 +732,7 @@ def generate_fedramp_report(duo_data: Dict[str, Any], output_dir: str) -> None:
         
         # Extract key indicators
         admin_compliant = admin_count <= 5 and has_separation
-        fips_compliant = fips_status.get("fips_enabled", False) if fips_status else False
+        fips_compliant = safe_get(fips_status, "fips_enabled", False) if isinstance(fips_status, dict) else False
         
         # Provide overall assessment
         if admin_compliant and fips_compliant:
@@ -619,8 +789,10 @@ def generate_user_report(user_analysis: Dict[str, Any], output_dir: str) -> None
         f.write("---------------------------------\n")
         
         # List up to 10 unenrolled active users
-        for i, user in enumerate(user_analysis["unenrolled_users"][:10]):
-            f.write(f"- {user.get('username', 'Unknown')} ({user.get('email', 'No email')})\n")
+        for user in user_analysis["unenrolled_users"][:10]:
+            username = safe_get(user, 'username', 'Unknown')
+            email = safe_get(user, 'email', 'No email')
+            f.write(f"- {username} ({email})\n")
         
         if len(user_analysis["unenrolled_users"]) > 10:
             f.write(f"\n...and {len(user_analysis['unenrolled_users']) - 10} more\n")
@@ -651,26 +823,33 @@ def generate_policy_report(settings: Dict[str, Any], output_dir: str) -> None:
         f.write("---------------------\n")
         
         # Extract global policy settings if available
-        global_policy = settings.get("global_policy", {})
+        global_policy = safe_get(settings, "global_policy", {})
         
-        if global_policy:
-            f.write(f"- MFA Required: {global_policy.get('require_mfa', False)}\n")
-            f.write(f"- FIDO2 Enforced: {global_policy.get('fido2_enforced', False)}\n")
-            f.write(f"- Hardware Token Required: {global_policy.get('hardware_token_required', False)}\n")
-            f.write(f"- Duo Push Setting: {global_policy.get('duo_push_setting', 'unknown')}\n")
-            f.write(f"- SMS/Phone Setting: {global_policy.get('sms_setting', 'unknown')}/{global_policy.get('voice_setting', 'unknown')}\n\n")
+        if global_policy and isinstance(global_policy, dict):
+            require_mfa = safe_get(global_policy, 'require_mfa', False)
+            fido2_enforced = safe_get(global_policy, 'fido2_enforced', False)
+            hardware_required = safe_get(global_policy, 'hardware_token_required', False)
+            duo_push_setting = safe_get(global_policy, 'duo_push_setting', 'unknown')
+            sms_setting = safe_get(global_policy, 'sms_setting', 'unknown')
+            voice_setting = safe_get(global_policy, 'voice_setting', 'unknown')
+            
+            f.write(f"- MFA Required: {require_mfa}\n")
+            f.write(f"- FIDO2 Enforced: {fido2_enforced}\n")
+            f.write(f"- Hardware Token Required: {hardware_required}\n")
+            f.write(f"- Duo Push Setting: {duo_push_setting}\n")
+            f.write(f"- SMS/Phone Setting: {sms_setting}/{voice_setting}\n\n")
         else:
             f.write("No global policy found\n\n")
         
         f.write("COMPLIANCE ASSESSMENT:\n")
         f.write("---------------------\n")
         
-        if global_policy:
-            require_mfa = global_policy.get('require_mfa', False)
-            fido2_enforced = global_policy.get('fido2_enforced', False)
-            hardware_required = global_policy.get('hardware_token_required', False)
-            sms_allowed = global_policy.get('sms_setting', '') == 'allowed'
-            voice_allowed = global_policy.get('voice_setting', '') == 'allowed'
+        if global_policy and isinstance(global_policy, dict):
+            require_mfa = safe_get(global_policy, 'require_mfa', False)
+            fido2_enforced = safe_get(global_policy, 'fido2_enforced', False)
+            hardware_required = safe_get(global_policy, 'hardware_token_required', False)
+            sms_allowed = safe_get(global_policy, 'sms_setting', '') == 'allowed'
+            voice_allowed = safe_get(global_policy, 'voice_setting', '') == 'allowed'
             
             f.write(f"{'✅ MFA is globally required' if require_mfa else '❌ MFA is NOT globally required'}\n")
             f.write(f"{'✅ FIDO2 (phishing-resistant) is enforced' if fido2_enforced else '⚠️ FIDO2 (phishing-resistant) is NOT enforced'}\n")
@@ -686,14 +865,14 @@ def generate_policy_report(settings: Dict[str, Any], output_dir: str) -> None:
         f.write("\nRECOMMENDATIONS:\n")
         f.write("---------------\n")
         
-        if global_policy:
-            if not global_policy.get('require_mfa', False):
+        if global_policy and isinstance(global_policy, dict):
+            if not safe_get(global_policy, 'require_mfa', False):
                 f.write("- Enable global MFA requirement\n")
-            if not global_policy.get('fido2_enforced', False):
+            if not safe_get(global_policy, 'fido2_enforced', False):
                 f.write("- Enable FIDO2 enforcement for phishing-resistant authentication\n")
-            if not global_policy.get('hardware_token_required', False):
+            if not safe_get(global_policy, 'hardware_token_required', False):
                 f.write("- Consider requiring hardware tokens for sensitive users\n")
-            if global_policy.get('sms_setting', '') == 'allowed' or global_policy.get('voice_setting', '') == 'allowed':
+            if safe_get(global_policy, 'sms_setting', '') == 'allowed' or safe_get(global_policy, 'voice_setting', '') == 'allowed':
                 f.write("- Phase out SMS/Phone authentication methods per CISA guidance\n")
         else:
             f.write("- Configure a global policy to enforce MFA requirements\n")
@@ -728,8 +907,8 @@ def generate_executive_summary(
         f.write("-----------\n")
         
         # Extract key policy settings
-        global_policy = settings.get("global_policy", {})
-        mfa_required = global_policy.get("require_mfa", False)
+        global_policy = safe_get(settings, "global_policy", {})
+        mfa_required = safe_get(global_policy, "require_mfa", False) if isinstance(global_policy, dict) else False
         
         # Get phishing-resistant and SMS/phone usage
         phishing_resistant = auth_analysis["phishing_resistant_count"] > 0

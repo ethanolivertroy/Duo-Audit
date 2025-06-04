@@ -41,6 +41,14 @@ pip install -r requirements.txt
 ./duo-audit.py --output-dir /path/to/output
 ```
 
+## Security Notice
+
+**Important:** This tool retrieves and stores sensitive security configuration data. Please ensure:
+- Store output files in a secure location with appropriate access controls
+- Review and redact any sensitive information before sharing reports
+- Use encrypted storage for archived assessment results
+- Follow your organization's data handling policies
+
 ## Note on FIPS & Trusted Endpoints
 
 **Summary:**
