@@ -1,6 +1,8 @@
-# Duo Security FedRAMP, NIST, and CISA Compliance Evaluation Guide
+# Duo Security FedRAMP 20x, NIST, and CISA Compliance Evaluation Guide
 
-This guide provides a systematic approach to manually evaluate a Duo Security implementation for FedRAMP, NIST 800-53, and CISA compliance, complementing the automated `duo-audit.py` script. It follows the same assessment areas as the script but provides step-by-step instructions for a hands-on evaluation.
+This guide provides a systematic approach to manually evaluate a Duo Security implementation for **FedRAMP 20x Key Security Indicators (KSI-IAM themes)**, legacy FedRAMP / NIST SP 800-53 Rev 5 control themes, and CISA phishing-resistant MFA expectations—complementing the automated `duo-audit.py` script (v1.2+). Prefer scheduled runs and retention of `fedramp_20x_ksi_evidence.json` for continuous validation programs.
+
+Author: [Ethan Troy](https://ethantroy.dev)
 
 ## Table of Contents
 1. [Prerequisites](#prerequisites)
@@ -175,7 +177,18 @@ curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
   "https://${DUO_API_HOSTNAME}/admin/v1/administrator_log?limit=1000" | jq . > admin_logs.json
 ```
 
-### FedRAMP Requirements Checklist
+### FedRAMP 20x KSI-IAM Checklist (Duo-focused)
+
+- [ ] **KSI-IAM-MFA** — Phishing-resistant MFA enforced; no unenrolled in-scope users
+- [ ] **KSI-IAM-APM** — Passwordless / strong authenticators preferred; SMS/voice phased out
+- [ ] **KSI-IAM-ELP** — Duo admin roles least-privileged and reviewed persistently
+- [ ] **KSI-IAM-AAM** — Enrollment/admin exports automated on a schedule (evidence retained)
+- [ ] **KSI-IAM-SNU** — Admin API integrations and secrets inventoried and rotated
+- [ ] **KSI-IAM-SUS** — Session lifetime tuned; privileged activity logs monitored
+
+References: [FedRAMP RFC-0006](https://www.fedramp.gov/rfcs/0006/), [IAM KSIs (preview)](https://preview.fedramp.gov/2026/providers/20x/key-security-indicators/identity-and-access-management/)
+
+### Legacy FedRAMP / SP 800-53 Requirements Checklist
 - [ ] Administrator accounts are limited and follow least privilege
 - [ ] Administrators use phishing-resistant MFA methods
 - [ ] Session timeout is set appropriately (30 minutes or less)

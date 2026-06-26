@@ -3,20 +3,20 @@
 """
 duo-audit.py
 
-A comprehensive script to evaluate Duo Security for FedRAMP, NIST, and CISA compliance.
-Focuses on MFA best practices, phishing-resistant authentication, and regulatory requirements.
+Evaluate Duo Security against FedRAMP 20x Key Security Indicators (KSIs),
+legacy FedRAMP / NIST SP 800-53 Rev 5 control themes, NIST SP 800-63B,
+and CISA phishing-resistant MFA expectations.
 
-Copyright (C) 2025 Ethan Troy <https://ethantroy.com>
+Focuses on MFA enforcement, phishing-resistant authenticators, least privilege
+for Duo admins, and machine-readable evidence suitable for continuous validation.
 
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+Author: Ethan Troy <https://ethantroy.dev>
+License: Unlicense (public domain dedication) — see LICENSE
 
 Requires:
-  - Python 3.6+
+  - Python 3.8+
   - duo_client Python library
-  - json, colorama, tabulate libraries
+  - colorama, tabulate (optional but recommended)
 
 Usage:
   python3 duo-audit.py
@@ -65,8 +65,19 @@ except ImportError:
     HAS_TABULATE = False
 
 # Script version information
-SCRIPT_VERSION = "1.1.0"
-SCRIPT_DATE = "2025-06-03"
+SCRIPT_VERSION = "1.2.0"
+SCRIPT_DATE = "2026-06-25"
+
+# FedRAMP 20x KSI references for IAM outcomes observable via Duo Admin API / config
+# (official indicators evolve; map assessments to current public KSI themes)
+FEDRAMP_20X_KSI_IAM = (
+    ("KSI-IAM-MFA", "Phishing-resistant multi-factor authentication enforced for users"),
+    ("KSI-IAM-APM", "Passwordless / strong authenticator methods preferred over SMS/phone"),
+    ("KSI-IAM-ELP", "Least privilege and role separation for privileged Duo administrators"),
+    ("KSI-IAM-AAM", "Account lifecycle signals (enrollment, status, admin roles) available for automation"),
+    ("KSI-IAM-SNU", "Non-user / integration authentication surfaces reviewed (API integrations)"),
+    ("KSI-IAM-SUS", "Privileged access and session posture can be monitored (logs + session settings)"),
+)
 
 # API Rate limiting settings
 MAX_RETRIES = 3
@@ -193,7 +204,7 @@ def print_banner():
 |_______/  \______/   \______/     /__/     \__\ \______/  |_______/ |__|     |__|
 
 {Fore.CYAN}Duo Audit v{SCRIPT_VERSION}
-{Fore.CYAN}FedRAMP | NIST SP 800-63B | CISA Directives
+{Fore.CYAN}FedRAMP 20x KSIs | NIST SP 800-63B | CISA Directives
 {Fore.CYAN}Enhanced with retry logic and data validation
 """
     print(banner)
@@ -616,135 +627,312 @@ def generate_nist_report(auth_analysis: Dict[str, Any], output_dir: str) -> None
             
         f.write("- Document authentication requirements in System Security Plan\n")
 
-def generate_fedramp_report(duo_data: Dict[str, Any], output_dir: str) -> None:
-    """Generate FedRAMP compliance report."""
+def _assess_fedramp_20x_signals(
+    duo_data: Dict[str, Any],
+    auth_analysis: Optional[Dict[str, Any]] = None,
+    user_analysis: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Derive FedRAMP 20x–oriented IAM signals from collected Duo data."""
+    admins = duo_data.get("admins", []) or []
+    settings = duo_data.get("settings", {}) or {}
+    integrations = duo_data.get("integrations", []) or []
+    fips_status = duo_data.get("fips_status", {}) or {}
+    trusted_endpoints = duo_data.get("trusted_endpoints", {}) or {}
+
+    admin_roles = set()
+    for admin in admins:
+        if isinstance(admin, dict):
+            role = safe_get(admin, "role", "")
+            if role:
+                admin_roles.add(role)
+    has_separation = len(admin_roles) > 1
+    admin_count = len(admins)
+
+    global_policy = safe_get(settings, "global_policy", {})
+    mfa_required = bool(safe_get(global_policy, "require_mfa", False)) if isinstance(global_policy, dict) else False
+
+    phishing_resistant = False
+    sms_phone_usage = False
+    users_without_mfa = None
+    if auth_analysis:
+        phishing_resistant = auth_analysis.get("phishing_resistant_count", 0) > 0
+        sms_phone_usage = auth_analysis.get("sms_phone_count", 0) > 0
+    if user_analysis is not None:
+        users_without_mfa = len(user_analysis.get("unenrolled_users", []) or [])
+
+    auth_lifetime = safe_get(settings, "auth_lifetime", {})
+    session_ok = None
+    timeout_seconds = None
+    if isinstance(auth_lifetime, dict):
+        timeout_value = safe_get(auth_lifetime, "auth_lifetime", None)
+        try:
+            timeout_seconds = int(timeout_value) if timeout_value is not None else None
+            if timeout_seconds is not None:
+                session_ok = 0 < timeout_seconds <= 30 * 60
+        except (ValueError, TypeError):
+            session_ok = None
+
+    fips_enabled = safe_get(fips_status, "fips_enabled", None) if isinstance(fips_status, dict) else None
+    device_trust = safe_get(trusted_endpoints, "enabled", None) if isinstance(trusted_endpoints, dict) else None
+    integration_count = len(integrations) if isinstance(integrations, list) else 0
+
+    # KSI-style outcomes (pass / fail / unknown) for continuous-evidence packaging
+    def outcome(ok: Optional[bool]) -> str:
+        if ok is True:
+            return "pass"
+        if ok is False:
+            return "fail"
+        return "unknown"
+
+    ksi_results = {
+        "KSI-IAM-MFA": {
+            "title": "Phishing-resistant MFA posture",
+            "status": outcome(
+                phishing_resistant and mfa_required and (users_without_mfa == 0 if users_without_mfa is not None else None)
+                if auth_analysis is not None
+                else (mfa_required if mfa_required else None)
+            ),
+            "evidence": {
+                "mfa_required_policy": mfa_required,
+                "phishing_resistant_methods_observed": phishing_resistant,
+                "users_without_mfa": users_without_mfa,
+            },
+            "notes": "FedRAMP 20x prioritizes phishing-resistant MFA (FIDO2/WebAuthn, PIV/CAC) over SMS/push/TOTP alone.",
+        },
+        "KSI-IAM-APM": {
+            "title": "Passwordless / strong authenticator preference",
+            "status": outcome(phishing_resistant and not sms_phone_usage if auth_analysis is not None else None),
+            "evidence": {
+                "phishing_resistant_methods_observed": phishing_resistant,
+                "sms_or_phone_methods_observed": sms_phone_usage,
+            },
+            "notes": "Prefer passwordless / origin-bound authenticators; phase out SMS and voice OTP.",
+        },
+        "KSI-IAM-ELP": {
+            "title": "Least privilege for Duo administrators",
+            "status": outcome(admin_count > 0 and has_separation and admin_count <= 10),
+            "evidence": {
+                "admin_count": admin_count,
+                "distinct_admin_roles": sorted(admin_roles),
+                "role_separation": has_separation,
+            },
+            "notes": "Limit Owner/Admin roles; prefer scoped roles (Help Desk, User Manager, etc.).",
+        },
+        "KSI-IAM-AAM": {
+            "title": "Account lifecycle signals for automation",
+            "status": "pass" if admin_count >= 0 else "unknown",
+            "evidence": {
+                "admin_api_admins_exported": admin_count,
+                "user_enrollment_export_available": user_analysis is not None,
+            },
+            "notes": "20x expects persistent, automatable validation; re-run this tool on a schedule and retain JSON evidence.",
+        },
+        "KSI-IAM-SNU": {
+            "title": "Non-user / integration authentication surfaces",
+            "status": outcome(integration_count >= 0),
+            "evidence": {"integration_count": integration_count},
+            "notes": "Review Admin API integrations and application secrets; rotate keys; least privilege on Admin API ikey.",
+        },
+        "KSI-IAM-SUS": {
+            "title": "Session and privileged access monitoring readiness",
+            "status": outcome(session_ok),
+            "evidence": {
+                "auth_lifetime_seconds": timeout_seconds,
+                "session_timeout_within_30m": session_ok,
+                "admin_activity_logs_via_api": True,
+            },
+            "notes": "Tune session lifetime; monitor admin and auth logs continuously (20x 'persistent' validation).",
+        },
+    }
+
+    # Legacy Rev5-oriented signals retained for hybrid programs
+    legacy = {
+        "admin_count_reasonable": admin_count <= 5,
+        "admin_role_separation": has_separation,
+        "fips_enabled": fips_enabled,
+        "device_trust_enabled": device_trust,
+        "session_timeout_ok": session_ok,
+        "duo_federal_manual_check_required": True,
+    }
+
+    return {
+        "framework": "FedRAMP 20x (KSI-IAM themes) + legacy FedRAMP / SP 800-53 Rev 5 themes",
+        "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "tool_version": SCRIPT_VERSION,
+        "ksi_results": ksi_results,
+        "legacy_signals": legacy,
+        "references": [
+            "https://www.fedramp.gov/rfcs/0006/",
+            "https://preview.fedramp.gov/2026/providers/20x/key-security-indicators/identity-and-access-management/",
+            "https://duo.com/docs/duo-federal-guide",
+        ],
+    }
+
+
+def generate_fedramp_20x_ksi_json(
+    duo_data: Dict[str, Any],
+    output_dir: str,
+    auth_analysis: Optional[Dict[str, Any]] = None,
+    user_analysis: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Write machine-readable FedRAMP 20x KSI evidence package (JSON)."""
+    assessment = _assess_fedramp_20x_signals(duo_data, auth_analysis, user_analysis)
+    path = f"{output_dir}/compliance_reports/fedramp_20x_ksi_evidence.json"
+    with open(path, "w") as f:
+        json.dump(assessment, f, indent=2, default=str)
+    return path
+
+
+def generate_fedramp_report(
+    duo_data: Dict[str, Any],
+    output_dir: str,
+    auth_analysis: Optional[Dict[str, Any]] = None,
+    user_analysis: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Generate FedRAMP 20x–aligned human-readable compliance report (plus legacy themes)."""
     report_file = f"{output_dir}/compliance_reports/fedramp_compliance_report.txt"
-    
-    # Extract relevant data
-    admins = duo_data.get("admins", [])
-    settings = duo_data.get("settings", {})
-    fips_status = duo_data.get("fips_status", {})
-    trusted_endpoints = duo_data.get("trusted_endpoints", {})
-    
+    assessment = _assess_fedramp_20x_signals(duo_data, auth_analysis, user_analysis)
+    admins = duo_data.get("admins", []) or []
+    settings = duo_data.get("settings", {}) or {}
+    fips_status = duo_data.get("fips_status", {}) or {}
+    trusted_endpoints = duo_data.get("trusted_endpoints", {}) or {}
+    legacy = assessment["legacy_signals"]
+    ksi_results = assessment["ksi_results"]
+
     with open(report_file, "w") as f:
-        f.write("FEDRAMP COMPLIANCE ASSESSMENT\n")
-        f.write("===========================\n")
-        f.write(f"Date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-        
-        f.write("1. ADMINISTRATOR ACCESS CONTROLS\n")
-        f.write("-----------------------------\n")
-        
+        f.write("FEDRAMP 20x + LEGACY FEDRAMP COMPLIANCE ASSESSMENT\n")
+        f.write("==================================================\n")
+        f.write(f"Date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Tool version: {SCRIPT_VERSION}\n")
+        f.write("Scope: Duo Security as an identity / MFA control plane for FedRAMP-authorized systems\n\n")
+
+        f.write("CONTEXT: FEDRAMP 20x\n")
+        f.write("-------------------\n")
+        f.write("FedRAMP 20x emphasizes Key Security Indicators (KSIs), continuous/persistent validation,\n")
+        f.write("and machine-readable evidence over static narrative packages alone. This report maps Duo\n")
+        f.write("Admin API signals to KSI-IAM themes (MFA, authenticator strength, least privilege, account\n")
+        f.write("automation readiness, non-user/integration auth, and session/privileged monitoring).\n")
+        f.write("See also: compliance_reports/fedramp_20x_ksi_evidence.json\n\n")
+        f.write("Official references:\n")
+        for ref in assessment["references"]:
+            f.write(f"  - {ref}\n")
+        f.write("\n")
+
+        f.write("1. FEDRAMP 20x KEY SECURITY INDICATORS (IAM — DUO-OBSERVABLE)\n")
+        f.write("-----------------------------------------------------------\n")
+        for ksi_id, meta in ksi_results.items():
+            status = meta.get("status", "unknown").upper()
+            f.write(f"{ksi_id}: {meta.get('title')}\n")
+            f.write(f"  Status: {status}\n")
+            f.write(f"  Notes: {meta.get('notes', '')}\n")
+            ev = meta.get("evidence") or {}
+            for k, v in ev.items():
+                f.write(f"  Evidence.{k}: {v}\n")
+            f.write("\n")
+
+        pass_count = sum(1 for m in ksi_results.values() if m.get("status") == "pass")
+        fail_count = sum(1 for m in ksi_results.values() if m.get("status") == "fail")
+        unk_count = sum(1 for m in ksi_results.values() if m.get("status") == "unknown")
+        f.write(f"KSI rollup (this scan): pass={pass_count} fail={fail_count} unknown={unk_count}\n\n")
+
+        f.write("2. ADMINISTRATOR ACCESS CONTROLS (KSI-IAM-ELP / AC-2 / AC-6 themes)\n")
+        f.write("------------------------------------------------------------------\n")
         admin_count = len(admins)
         f.write(f"Administrator Count: {admin_count}\n\n")
-        
         f.write("Administrator Details:\n")
-        for admin in sorted(admins, key=lambda x: safe_get(x, 'name', '')):
-            name = safe_get(admin, 'name', 'Unknown')
-            email = safe_get(admin, 'email', 'No email')
-            role = safe_get(admin, 'role', 'Unknown')
-            status = safe_get(admin, 'status', 'Unknown')
-            email_verified = safe_get(admin, 'email_verified', False)
+        for admin in sorted(admins, key=lambda x: safe_get(x, "name", "")):
+            name = safe_get(admin, "name", "Unknown")
+            email = safe_get(admin, "email", "No email")
+            role = safe_get(admin, "role", "Unknown")
+            status = safe_get(admin, "status", "Unknown")
+            email_verified = safe_get(admin, "email_verified", False)
             f.write(f"- {name} ({email})\n")
             f.write(f"  • Role: {role}\n")
             f.write(f"  • Status: {status}\n")
-            f.write(f"  • 2FA Enrolled: {'Yes' if email_verified else 'No'}\n")
-        
-        f.write("\nFedRAMP Requirements Assessment:\n")
-        f.write(f"✓ Minimum number of administrators: {'YES' if admin_count <= 5 else f'NO (too many - {admin_count})'}\n")
-        
-        # Check for separation of duties (different admin roles)
-        admin_roles = set()
-        for admin in admins:
-            if isinstance(admin, dict):
-                role = safe_get(admin, 'role', '')
-                if role:
-                    admin_roles.add(role)
-        has_separation = len(admin_roles) > 1
-        f.write(f"✓ Separation of duties: {'YES' if has_separation else 'NO (all admins have same role)'}\n\n")
-        
-        f.write("2. AUDIT LOGGING CAPABILITIES\n")
-        f.write("---------------------------\n")
-        f.write("FedRAMP requires comprehensive audit logging with 90-day online retention.\n")
-        f.write("Duo Federal provides the required audit logging capabilities.\n\n")
-        f.write("✓ Authentication logs: Available through Admin API\n")
-        f.write("✓ Administrator activity logs: Available through Admin API\n\n")
-        
-        # Extract session timeout settings if available
-        f.write("3. SESSION MANAGEMENT\n")
-        f.write("-----------------\n")
+            f.write(f"  • Email verified / 2FA signal: {'Yes' if email_verified else 'No'}\n")
+
+        f.write("\nAssessment:\n")
+        f.write(
+            f"✓ Prefer few highly privileged admins: "
+            f"{'YES' if legacy.get('admin_count_reasonable') else f'REVIEW (count={admin_count}; target often <=5 Owners/Admins)'}\n"
+        )
+        f.write(
+            f"✓ Distinct admin roles (separation of duties signal): "
+            f"{'YES' if legacy.get('admin_role_separation') else 'NO (all admins appear to share one role)'}\n\n"
+        )
+
+        f.write("3. CONTINUOUS MONITORING / AUDIT EVIDENCE (20x persistence)\n")
+        f.write("----------------------------------------------------------\n")
+        f.write("20x expects KSIs to be validated repeatedly (machine checks on a short cadence for\n")
+        f.write("automatable indicators; process checks on a longer cadence). For Duo:\n")
+        f.write("- Authentication logs: Admin API (export and retain per agency policy)\n")
+        f.write("- Administrator activity logs: Admin API\n")
+        f.write("- Re-run duo-audit.py on a schedule; keep fedramp_20x_ksi_evidence.json as evidence artifacts\n")
+        f.write("- Align retention with agency / authorizing official requirements (legacy packages often\n")
+        f.write("  cited multi-tier online/archive retention; confirm against your ATO boundary)\n\n")
+
+        f.write("4. SESSION MANAGEMENT (KSI-IAM-SUS / AC-12 themes)\n")
+        f.write("--------------------------------------------------\n")
         auth_lifetime = safe_get(settings, "auth_lifetime", {})
         if auth_lifetime and isinstance(auth_lifetime, dict):
-            timeout_value = safe_get(auth_lifetime, 'auth_lifetime', 'Unknown')
-            timeout_enabled = safe_get(auth_lifetime, 'auth_lifetime_enabled', 'Unknown')
+            timeout_value = safe_get(auth_lifetime, "auth_lifetime", "Unknown")
+            timeout_enabled = safe_get(auth_lifetime, "auth_lifetime_enabled", "Unknown")
             f.write(f"Authentication session timeout: {timeout_value} seconds\n")
-            f.write(f"Session expiration enforced: {timeout_enabled}\n\n")
-            
-            # Assess compliance
-            try:
-                timeout_seconds = int(timeout_value) if timeout_value != 'Unknown' else 0
-                is_compliant = timeout_seconds > 0 and timeout_seconds <= 30 * 60  # 30 minutes max for FedRAMP
-                f.write(f"✓ Session timeout compliance: {'YES' if is_compliant else f'NO (exceeds 30 minutes - {timeout_seconds/60:.1f} minutes)'}\n\n")
-            except (ValueError, TypeError):
-                f.write("✓ Session timeout compliance: Unable to assess (invalid timeout value)\n\n")
-        else:
-            f.write("Session timeout settings: Not available\n\n")
-        
-        # FIPS Mode information
-        f.write("4. FIPS COMPLIANCE\n")
-        f.write("----------------\n")
-        if fips_status and isinstance(fips_status, dict):
-            fips_enabled = safe_get(fips_status, "fips_enabled", False)
-            f.write(f"FIPS mode enabled: {'Yes' if fips_enabled else 'No'}\n")
-            
-            if fips_enabled:
-                f.write("✅ FIPS 140-2 requirements met\n\n")
+            f.write(f"Session expiration enforced: {timeout_enabled}\n")
+            if legacy.get("session_timeout_ok") is True:
+                f.write("✓ Session timeout within common 30-minute federal benchmark: YES\n\n")
+            elif legacy.get("session_timeout_ok") is False:
+                f.write("✓ Session timeout within common 30-minute federal benchmark: NO — tighten policy\n\n")
             else:
-                f.write("❌ FIPS 140-2 requirements NOT met - FIPS mode is disabled\n\n")
+                f.write("✓ Session timeout assessment: Unable to determine from API payload\n\n")
         else:
-            f.write("FIPS status: Information not available\n")
-            f.write("⚠️ Manual verification needed for FIPS 140-2 compliance\n\n")
-        
-        # Device trust settings
-        f.write("5. DEVICE TRUST ASSESSMENT\n")
-        f.write("-----------------------\n")
-        if trusted_endpoints and isinstance(trusted_endpoints, dict):
+            f.write("Session timeout settings: Not available via this collection path\n\n")
+
+        f.write("5. CRYPTOGRAPHIC MODULE / FIPS (service offering + on-prem components)\n")
+        f.write("---------------------------------------------------------------------\n")
+        if isinstance(fips_status, dict) and fips_status:
+            fips_enabled = safe_get(fips_status, "fips_enabled", False)
+            f.write(f"FIPS mode signal from API: {'Yes' if fips_enabled else 'No'}\n")
+            if fips_enabled:
+                f.write("✅ FIPS enablement signal present (confirm FIPS 140-2/140-3 module coverage for boundary)\n\n")
+            else:
+                f.write("❌ FIPS enablement not confirmed via API — required for Duo Federal / many ATO paths\n\n")
+        else:
+            f.write("FIPS status: Not exposed by Duo Admin API client in this environment\n")
+            f.write("⚠️ Manually verify Duo Federal edition and FIPS-validated components (Auth Proxy, etc.)\n")
+            f.write("   https://duo.com/docs/duo-federal-guide\n\n")
+
+        f.write("6. DEVICE TRUST / TRUSTED ENDPOINTS\n")
+        f.write("----------------------------------\n")
+        if isinstance(trusted_endpoints, dict) and trusted_endpoints:
             enabled = safe_get(trusted_endpoints, "enabled", False)
             f.write(f"Device trust policies enabled: {'Yes' if enabled else 'No'}\n")
-            
-            if enabled:
-                f.write("✅ Device posture assessment in use\n")
-            else:
-                f.write("⚠️ Device posture assessment not enabled\n")
+            f.write(("✅ " if enabled else "⚠️ ") + "Device posture assessment signal\n\n")
         else:
-            f.write("Device trust policies: Information not available\n")
-            f.write("⚠️ Manual verification needed for device posture assessment\n\n")
-        
-        f.write("6. FEDRAMP AUTHORIZATION REQUIREMENTS\n")
-        f.write("----------------------------------\n")
-        f.write("For FedRAMP compliance, you must use Duo Federal with:\n")
-        f.write("- FIPS 140-2/140-3 validated cryptographic modules\n")
-        f.write("- FedRAMP Moderate or High authorization\n")
-        f.write("- US-based support personnel\n\n")
-        
-        # Overall compliance assessment
-        f.write("OVERALL FEDRAMP COMPLIANCE ASSESSMENT\n")
-        f.write("----------------------------------\n")
-        
-        # Extract key indicators
-        admin_compliant = admin_count <= 5 and has_separation
-        fips_compliant = safe_get(fips_status, "fips_enabled", False) if isinstance(fips_status, dict) else False
-        
-        # Provide overall assessment
-        if admin_compliant and fips_compliant:
-            f.write("✅ LIKELY COMPLIANT: Core FedRAMP requirements appear to be met\n")
-        elif fips_compliant:
-            f.write("⚠️ PARTIAL COMPLIANCE: FIPS requirements met, but administrator controls need review\n")
-        elif admin_compliant:
-            f.write("⚠️ PARTIAL COMPLIANCE: Administrator controls in place, but FIPS mode not confirmed\n")
+            f.write("Device trust policies: Not available via API — verify in Admin Console\n\n")
+
+        f.write("7. AUTHORIZATION PATH (20x PILOT VS TRADITIONAL PACKAGE)\n")
+        f.write("--------------------------------------------------------\n")
+        f.write("Duo as a commercial SaaS IdP/MFA service is typically authorized as Duo Federal\n")
+        f.write("(FedRAMP Marketplace authorization) while agencies inherit controls into their systems.\n")
+        f.write("For FedRAMP 20x pilots and continuous monitoring programs:\n")
+        f.write("- Prefer automated evidence (this tool's JSON + scheduled runs)\n")
+        f.write("- Document inheritance from Duo's authorization vs customer-responsible configuration\n")
+        f.write("- Confirm phishing-resistant MFA policy at the agency IdP and application tiers\n")
+        f.write("- Use Duo Federal with FIPS-validated crypto where required by impact level\n\n")
+
+        f.write("OVERALL ASSESSMENT (HEURISTIC — NOT AN ATO DECISION)\n")
+        f.write("----------------------------------------------------\n")
+        if fail_count == 0 and pass_count >= 3:
+            f.write("✅ STRONG 20x IAM SIGNALS: Core KSI-IAM outcomes look favorable; close 'unknown' items\n")
+        elif fail_count == 0:
+            f.write("⚠️ INCOMPLETE EVIDENCE: Increase API coverage (auth methods, users) and re-run\n")
+        elif fail_count <= 2:
+            f.write("⚠️ GAPS: Remediate failed KSI-IAM items (especially MFA / phishing resistance)\n")
         else:
-            f.write("❌ NON-COMPLIANT: Multiple FedRAMP requirements not met\n")
-            
-        f.write("\nNOTE: Manual verification still needed to confirm Duo Federal edition is in use\n")
+            f.write("❌ MULTIPLE KSI-IAM FAILURES: Prioritize MFA enforcement and authenticator modernization\n")
+        f.write("\nManual verification still required for Duo Federal subscription and FIPS module inventory.\n")
+        f.write("Machine-readable twin: fedramp_20x_ksi_evidence.json\n")
 
 def generate_user_report(user_analysis: Dict[str, Any], output_dir: str) -> None:
     """Generate user enrollment status report."""
@@ -899,9 +1087,9 @@ def generate_executive_summary(
         f.write("EXECUTIVE SUMMARY\n")
         f.write("----------------\n")
         f.write("This assessment evaluates your Duo Security configuration against:\n")
-        f.write("1. FedRAMP security requirements\n")
+        f.write("1. FedRAMP 20x Key Security Indicators (KSI-IAM themes) + legacy FedRAMP control themes\n")
         f.write("2. NIST SP 800-63B authentication standards\n")
-        f.write("3. CISA Emergency Directive 22-02 for phishing-resistant MFA\n\n")
+        f.write("3. CISA Emergency Directive 22-02 / phishing-resistant MFA expectations\n\n")
         
         f.write("KEY FINDINGS\n")
         f.write("-----------\n")
@@ -936,29 +1124,32 @@ def generate_executive_summary(
             else:
                 nist_aal = "AAL2 CAPABLE ✅"
         
-        # FedRAMP compliance
-        fedramp_compliant = mfa_required and users_without_mfa == 0
+        # FedRAMP 20x KSI-IAM-MFA style outcome
+        fedramp_20x_mfa = mfa_required and users_without_mfa == 0 and phishing_resistant and not sms_phone_usage
+        fedramp_legacy = mfa_required and users_without_mfa == 0
         
         f.write(f"CISA Directive 22-02: {'COMPLIANT ✅' if cisa_compliant else 'NON-COMPLIANT ❌'}\n")
         f.write(f"NIST SP 800-63B: {nist_aal}\n")
-        f.write(f"FedRAMP Requirements: {'BASELINE COMPLIANT ✅' if fedramp_compliant else 'NON-COMPLIANT ❌'}\n\n")
+        f.write(f"FedRAMP 20x KSI-IAM (MFA/APM heuristic): {'FAVORABLE ✅' if fedramp_20x_mfa else 'GAPS ❌'}\n")
+        f.write(f"Legacy FedRAMP MFA baseline: {'BASELINE ✅' if fedramp_legacy else 'NON-COMPLIANT ❌'}\n\n")
         
         f.write("PRIORITY RECOMMENDATIONS\n")
         f.write("----------------------\n")
-        f.write("1. Enforce MFA for all users\n")
-        f.write("2. Implement phishing-resistant authentication (FIDO2/WebAuthn)\n")
-        f.write("3. Phase out SMS and phone call authentication\n")
-        f.write("4. Ensure hardware tokens are FIPS 140-2/140-3 validated\n")
-        f.write("5. Document Duo configuration in system security documentation\n\n")
+        f.write("1. Enforce MFA for all users (policy + enrollment)\n")
+        f.write("2. Prefer phishing-resistant / passwordless authenticators (FIDO2/WebAuthn, PIV/CAC)\n")
+        f.write("3. Phase out SMS and phone call authentication (KSI-IAM-APM / CISA)\n")
+        f.write("4. Limit Duo Owner/Admin roles; use scoped roles (KSI-IAM-ELP)\n")
+        f.write("5. Schedule continuous re-validation; retain fedramp_20x_ksi_evidence.json\n")
+        f.write("6. Confirm Duo Federal + FIPS 140-2/140-3 module coverage for the ATO boundary\n\n")
         
         f.write("NEXT STEPS\n")
         f.write("---------\n")
-        f.write("1. Review the detailed compliance reports in the assessment directory\n")
-        f.write("2. Remediate identified gaps in MFA implementation\n")
-        f.write("3. Update policies to enforce phishing-resistant authentication\n")
-        f.write("4. Verify Duo Federal edition for FedRAMP compliance\n\n")
+        f.write("1. Review fedramp_compliance_report.txt and fedramp_20x_ksi_evidence.json\n")
+        f.write("2. Remediate failed KSI-IAM signals (especially phishing-resistant MFA)\n")
+        f.write("3. Wire this scan into CI or a recurring job for 20x-style persistence\n")
+        f.write("4. Verify Duo Federal edition and inheritance in your authorization package\n\n")
         
-        f.write("For questions on this assessment, contact your security team.")
+        f.write("Tool: https://ethantroy.dev — contact your security team for ATO decisions.")
 
 def generate_compliance_checklist(output_dir: str) -> None:
     """Generate compliance checklist."""
@@ -969,8 +1160,28 @@ def generate_compliance_checklist(output_dir: str) -> None:
         f.write("================================\n")
         f.write(f"Date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
         
-        f.write("FEDRAMP COMPLIANCE REQUIREMENTS\n")
-        f.write("-----------------------------\n")
+        f.write("FEDRAMP 20x KEY SECURITY INDICATORS (IAM — DUO-FOCUSED)\n")
+        f.write("-------------------------------------------------------\n")
+        f.write("[ ] KSI-IAM-MFA: Phishing-resistant MFA enforced for user authentication\n")
+        f.write("    - Global MFA required; no unenrolled users for in-scope populations\n")
+        f.write("    - FIDO2/WebAuthn, PIV/CAC, or equivalent preferred over SMS/push alone\n\n")
+        f.write("[ ] KSI-IAM-APM: Passwordless / strong authenticator methods\n")
+        f.write("    - Prefer passwordless; otherwise strong secrets + phishing-resistant MFA\n")
+        f.write("    - SMS/voice OTP phased out for privileged and federal workloads\n\n")
+        f.write("[ ] KSI-IAM-ELP: Least privilege for Duo administrators\n")
+        f.write("    - Minimal Owner/Admin accounts; scoped roles for operations\n")
+        f.write("    - Persistent review of privileged roles (20x 'persistently')\n\n")
+        f.write("[ ] KSI-IAM-AAM: Account lifecycle automation readiness\n")
+        f.write("    - Enrollment and admin exports available for scheduled validation\n")
+        f.write("    - Evidence artifacts retained (JSON + reports from this tool)\n\n")
+        f.write("[ ] KSI-IAM-SNU: Secure non-user / integration authentication\n")
+        f.write("    - Admin API integrations inventoried; keys rotated; least privilege ikey\n\n")
+        f.write("[ ] KSI-IAM-SUS: Privileged session / suspicious activity readiness\n")
+        f.write("    - Session lifetime tuned; admin and auth logs monitored continuously\n\n")
+        f.write("See: https://preview.fedramp.gov/2026/providers/20x/key-security-indicators/identity-and-access-management/\n\n")
+
+        f.write("LEGACY FEDRAMP / SP 800-53 REV 5 CONTROL THEMES (STILL USEFUL)\n")
+        f.write("------------------------------------------------------------\n")
         f.write("[ ] AC-2: Account Management\n")
         f.write("    - Limited administrator accounts with proper role separation\n")
         f.write("    - Clear user provisioning/deprovisioning procedures\n")
@@ -1059,8 +1270,11 @@ def analyze_compliance(duo_data: Dict[str, Any], output_dir: str) -> None:
     generate_nist_report(auth_analysis, output_dir)
     print(f"  - {Fore.GREEN}NIST SP 800-63B compliance report generated")
     
-    generate_fedramp_report(duo_data, output_dir)
-    print(f"  - {Fore.GREEN}FedRAMP compliance report generated")
+    generate_fedramp_report(duo_data, output_dir, auth_analysis, user_analysis)
+    print(f"  - {Fore.GREEN}FedRAMP 20x / legacy FedRAMP compliance report generated")
+
+    ksi_path = generate_fedramp_20x_ksi_json(duo_data, output_dir, auth_analysis, user_analysis)
+    print(f"  - {Fore.GREEN}FedRAMP 20x KSI evidence JSON: {ksi_path}")
     
     generate_user_report(user_analysis, output_dir)
     print(f"  - {Fore.GREEN}User enrollment report generated")
@@ -1149,6 +1363,7 @@ def main():
     print(f"- {output_dir}/compliance_reports/cisa_compliance_report.txt")
     print(f"- {output_dir}/compliance_reports/nist_compliance_report.txt")
     print(f"- {output_dir}/compliance_reports/fedramp_compliance_report.txt")
+    print(f"- {output_dir}/compliance_reports/fedramp_20x_ksi_evidence.json")
     print("====================================================")
 
 if __name__ == "__main__":

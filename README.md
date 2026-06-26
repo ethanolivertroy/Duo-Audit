@@ -2,102 +2,88 @@
 
 ![Duo Audit](image.png)
 
-A comprehensive tool for auditing Duo Security configurations against FedRAMP, NIST, and CISA compliance requirements. Using the official Duo Security API client for reliable and accurate compliance assessment.
+Audit Duo Security configurations against **FedRAMP 20x Key Security Indicators (KSIs)** (IAM themes), legacy FedRAMP / NIST SP 800-53 Rev 5 control themes, **NIST SP 800-63B**, and **CISA** phishing-resistant MFA expectations—using the official Duo Admin API client.
+
+Author: [Ethan Troy](https://ethantroy.dev)
 
 ## Features
 
-- Evaluates compliance with FedRAMP security controls
-- Checks adherence to NIST SP 800-63B authentication standards
-- Validates conformance with CISA Emergency Directive 22-02 for phishing-resistant MFA
-- Generates detailed compliance reports with findings and recommendations
-- Provides actionable remediation steps for identified issues
+- Maps Duo Admin API signals to **FedRAMP 20x KSI-IAM** outcomes (phishing-resistant MFA, authenticator strength, least privilege, account automation readiness, integrations, session monitoring)
+- Emits **machine-readable evidence** (`fedramp_20x_ksi_evidence.json`) for continuous / scheduled validation
+- Still produces human-readable FedRAMP, NIST, and CISA reports plus an executive summary
+- Actionable remediation guidance and a hybrid 20x + Rev5 checklist
 
 ## Requirements
 
-- Python 3.6+
-- Required Python libraries (install using `pip install -r requirements.txt`):
-  - duo_client: Official Duo Security API client
-  - colorama: For colored terminal output
-  - tabulate: For formatted tables in reports
+- Python 3.8+ (3.10+ recommended)
+- Dependencies (`pip install -r requirements.txt`):
+  - `duo_client` — official Duo Security API client
+  - `colorama` — colored terminal output
+  - `tabulate` — formatted tables in reports
 
 ## Installation
 
-1. Clone this repository
-2. Install dependencies:
 ```bash
+git clone https://github.com/ethanolivertroy/Duo-Audit.git
+cd Duo-Audit
 pip install -r requirements.txt
 ```
 
 ## Usage
 
 ```bash
-# Basic usage with prompts
+# Interactive prompts
 ./duo-audit.py
 
-# Or specify credentials via command line
+# Credentials on the command line
 ./duo-audit.py --host api-xxxxx.duosecurity.com --ikey YOUR_INTEGRATION_KEY --skey YOUR_SECRET_KEY
 
-# Specify custom output directory
+# Custom output directory
 ./duo-audit.py --output-dir /path/to/output
 ```
 
+Reports land under `compliance_reports/`, including:
+
+| Artifact | Purpose |
+|----------|---------|
+| `fedramp_compliance_report.txt` | FedRAMP 20x KSI narrative + legacy themes |
+| `fedramp_20x_ksi_evidence.json` | Machine-readable KSI status + evidence fields |
+| `executive_summary.txt` | Leadership-oriented rollup |
+| `compliance_checklist.txt` | Manual verification checklist (20x + Rev5) |
+| NIST / CISA / user / policy reports | Supporting assessments |
+
+Re-run on a schedule and retain JSON artifacts to support FedRAMP 20x–style **persistent** validation.
+
 ## Security Notice
 
-**Important:** This tool retrieves and stores sensitive security configuration data. Please ensure:
-- Store output files in a secure location with appropriate access controls
-- Review and redact any sensitive information before sharing reports
-- Use encrypted storage for archived assessment results
-- Follow your organization's data handling policies
+**Important:** This tool retrieves and stores sensitive security configuration data. Ensure you:
+
+- Store output in a controlled location with appropriate access controls
+- Redact secrets before sharing reports
+- Use encrypted storage for archives
+- Follow your organization’s data-handling policies
 
 ## Note on FIPS & Trusted Endpoints
 
-**Summary:**
-FIPS status and trusted endpoints API methods are not available in the Duo Admin API client. During execution, the script skips these checks and prints warnings for manual verification.
+FIPS status and trusted endpoints are **not** fully exposed via the Duo Admin API Python client in many tenants. The tool records what it can and flags **manual verification** for Duo Federal / FIPS-validated components (e.g. Authentication Proxy). See the [Duo Federal Guide](https://duo.com/docs/duo-federal-guide).
 
----
+| Feature | API available? | How to check |
+|---------|----------------|--------------|
+| FIPS compliance | Often no | Duo Federal docs / console |
+| Trusted endpoints | Often no | Admin Console |
+| Users, admins, policies, logs | Yes | Admin API |
 
-### Details
-- **No FIPS Status Endpoint:** The official [Duo Admin API documentation][1] does not list any FIPS status endpoint. Available endpoints cover user, admin, device, log, policy, and integration management.
-- **Missing API Methods:** FIPS status and trusted endpoints API methods are not available in the Duo Admin API client. The script automatically skips these checks and issues warnings for manual verification.
-- **FIPS Compliance in Duo:** FIPS compliance is managed via:
-  - Use of Duo Federal editions
-  - OS‑level FIPS mode for Duo components (Authentication Proxy, Unix integration, etc.)
-  - Supported versions and configurations
+## Compliance frameworks assessed
 
----
+- **FedRAMP 20x** — Key Security Indicators (especially **KSI-IAM** themes); see [RFC-0006](https://www.fedramp.gov/rfcs/0006/) and [IAM KSIs (preview)](https://preview.fedramp.gov/2026/providers/20x/key-security-indicators/identity-and-access-management/)
+- **Legacy FedRAMP / SP 800-53 Rev 5 themes** — AC/IA-oriented checklist items for hybrid programs
+- **NIST SP 800-63B** — authenticator assurance level signals
+- **CISA ED 22-02** — phishing-resistant MFA expectations
 
-### What You Can Do
-- **Manual Verification:** Review your Duo deployment settings and edition (Federal vs. Commercial), and verify OS FIPS mode as described in the [Duo Federal Guide][2].
-- **Administrative Console:** Check FIPS configuration and module validation under your Federal subscription settings.
-- **Automated Handling:** The script now automatically skips unavailable FIPS and trusted‐endpoints API calls and issues warnings prompting manual verification.
-
----
-
-### Table: Duo API vs. FIPS/Trusted Endpoints
-| Feature                   | API Endpoint Available? | How to Check                         |
-|---------------------------|-------------------------|--------------------------------------|
-| FIPS Compliance           | No                      | Manual/documentation review          |
-| Trusted Endpoints Config  | No                      | Admin Console, documentation         |
-| User/Admin/Policy Retrieval | Yes                   | Admin API                            |
-
----
-
-[1]: https://duo.com/docs/adminapi
-[2]: https://duo.com/docs/duo-federal-guide
-
-You will be prompted for your Duo Admin API credentials if not provided as arguments.
-
-## Compliance Standards Assessed
-
-- **FedRAMP**: Federal Risk and Authorization Management Program requirements
-- **NIST SP 800-63B**: Digital Identity Guidelines for authentication and lifecycle management
-- **CISA ED 22-02**: Requirements for implementing phishing-resistant MFA
+This tool supports **evidence collection and heuristics**; it does **not** grant or revoke an ATO.
 
 ## License
 
-Copyright (C) 2025 Ethan Troy <https://ethantroy.com>
+Released under the **[Unlicense](https://unlicense.org)** (public domain dedication). See [`LICENSE`](LICENSE).
 
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+Copyright dedication: Ethan Troy — <https://ethantroy.dev>
