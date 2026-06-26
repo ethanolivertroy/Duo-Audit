@@ -921,33 +921,21 @@ def generate_fedramp_report(
         f.write(f"Tool version: {SCRIPT_VERSION}\n")
         f.write("Scope: Duo Security as an identity / MFA control plane for FedRAMP-authorized systems\n\n")
 
-        f.write("CONTEXT: FEDRAMP CONSOLIDATED RULES FOR 2026 (20x KSIs)
-")
-        f.write("------------------------------------------------------
-")
-        f.write("Primary source: https://github.com/FedRAMP/2026-markdown
-")
-        f.write("(providers/20x/key-security-indicators/identity-and-access-management.md).
-")
-        f.write("KSIs measure outcomes continuously; not a classic control-by-control narrative alone.
-")
-        f.write("Maps Duo signals to six official KSI-IAM IDs (AAM, APM, ELP, JIT, SNU, SUS).
-")
-        f.write("Phishing-resistant MFA is under KSI-IAM-APM (no KSI-IAM-MFA ID in 2026-markdown).
-")
-        f.write("Machine-readable twin: compliance_reports/fedramp_20x_ksi_evidence.json
-
-")
-        f.write("Official references:
-")
+        f.write("CONTEXT: FEDRAMP CONSOLIDATED RULES FOR 2026 (20x KSIs)\n")
+        f.write("------------------------------------------------------\n")
+        f.write("Primary source: https://github.com/FedRAMP/2026-markdown\n")
+        f.write("(providers/20x/key-security-indicators/identity-and-access-management.md).\n")
+        f.write("KSIs measure outcomes continuously; not a classic control-by-control narrative alone.\n")
+        f.write("Maps Duo signals to six official KSI-IAM IDs (AAM, APM, ELP, JIT, SNU, SUS).\n")
+        f.write("Phishing-resistant MFA is under KSI-IAM-APM (no KSI-IAM-MFA ID in 2026-markdown).\n")
+        f.write("Machine-readable twin: compliance_reports/fedramp_20x_ksi_evidence.json\n\n")
+        f.write("Official references:\n")
         for ref in assessment["references"]:
-            f.write(f"  - {ref}
-")
-        f.write("
-")
+            f.write(f"  - {ref}\n")
+        f.write("\n")
 
-        f.write("1. FEDRAMP 20x KEY SECURITY INDICATORS (IAM — DUO-OBSERVABLE)\n")
-        f.write("-----------------------------------------------------------\n")
+        f.write("1. FEDRAMP 2026 KEY SECURITY INDICATORS (KSI-IAM — OFFICIAL IDs)\n")
+        f.write("--------------------------------------------------------------\n")
         for ksi_id, meta in ksi_results.items():
             status = meta.get("status", "unknown").upper()
             f.write(f"{ksi_id}: {meta.get('title')}\n")
