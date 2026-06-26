@@ -46,6 +46,11 @@ pip install -r requirements.txt
 | `fedramp_20x_ksi_evidence.json` | Machine-readable KSI status + evidence fields |
 | `executive_summary.txt` | Leadership rollup |
 | `compliance_checklist.txt` | Manual verification (2026 KSI-IAM + legacy Rev5 themes) |
+| `security_decision_records/` | Per-KSI **Security Decision Record** markdown stubs |
+
+JSON includes **`ruleset_provenance`** with a pinned `FedRAMP/2026-markdown` **commit SHA** (refresh `FEDRAMP_2026_MARKDOWN_PIN` in `duo-audit.py` when the corpus moves).
+
+**KSI-IAM-SUS:** administrator logs contribute *weak* signals (e.g. disable-like actions) but never auto-`pass` — response automation must be attested in the SDR.
 
 ## FedRAMP source of truth
 
