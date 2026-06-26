@@ -921,23 +921,38 @@ def generate_fedramp_report(
         f.write(f"Tool version: {SCRIPT_VERSION}\n")
         f.write("Scope: Duo Security as an identity / MFA control plane for FedRAMP-authorized systems\n\n")
 
-        f.write("CONTEXT: FEDRAMP 20x\n")
-        f.write("-------------------\n")
-        f.write("FedRAMP 20x emphasizes Key Security Indicators (KSIs), continuous/persistent validation,\n")
-        f.write("and machine-readable evidence over static narrative packages alone. This report maps Duo\n")
-        f.write("Admin API signals to KSI-IAM themes (MFA, authenticator strength, least privilege, account\n")
-        f.write("automation readiness, non-user/integration auth, and session/privileged monitoring).\n")
-        f.write("See also: compliance_reports/fedramp_20x_ksi_evidence.json\n\n")
-        f.write("Official references:\n")
+        f.write("CONTEXT: FEDRAMP CONSOLIDATED RULES FOR 2026 (20x KSIs)
+")
+        f.write("------------------------------------------------------
+")
+        f.write("Primary source: https://github.com/FedRAMP/2026-markdown
+")
+        f.write("(providers/20x/key-security-indicators/identity-and-access-management.md).
+")
+        f.write("KSIs measure outcomes continuously; not a classic control-by-control narrative alone.
+")
+        f.write("Maps Duo signals to six official KSI-IAM IDs (AAM, APM, ELP, JIT, SNU, SUS).
+")
+        f.write("Phishing-resistant MFA is under KSI-IAM-APM (no KSI-IAM-MFA ID in 2026-markdown).
+")
+        f.write("Machine-readable twin: compliance_reports/fedramp_20x_ksi_evidence.json
+
+")
+        f.write("Official references:
+")
         for ref in assessment["references"]:
-            f.write(f"  - {ref}\n")
-        f.write("\n")
+            f.write(f"  - {ref}
+")
+        f.write("
+")
 
         f.write("1. FEDRAMP 20x KEY SECURITY INDICATORS (IAM — DUO-OBSERVABLE)\n")
         f.write("-----------------------------------------------------------\n")
         for ksi_id, meta in ksi_results.items():
             status = meta.get("status", "unknown").upper()
             f.write(f"{ksi_id}: {meta.get('title')}\n")
+            if meta.get("official_outcome"):
+                f.write(f"  Official outcome: {meta.get('official_outcome')}\n")
             f.write(f"  Status: {status}\n")
             f.write(f"  Notes: {meta.get('notes', '')}\n")
             ev = meta.get("evidence") or {}
@@ -986,7 +1001,7 @@ def generate_fedramp_report(
         f.write("- Align retention with agency / authorizing official requirements (legacy packages often\n")
         f.write("  cited multi-tier online/archive retention; confirm against your ATO boundary)\n\n")
 
-        f.write("4. SESSION MANAGEMENT (KSI-IAM-SUS / AC-12 themes)\n")
+        f.write("4. SESSION MANAGEMENT (supports ELP / AC-12 — not KSI-IAM-SUS)\n")
         f.write("--------------------------------------------------\n")
         auth_lifetime = safe_get(settings, "auth_lifetime", {})
         if auth_lifetime and isinstance(auth_lifetime, dict):
@@ -1239,13 +1254,13 @@ def generate_executive_summary(
             else:
                 nist_aal = "AAL2 CAPABLE ✅"
         
-        # FedRAMP 20x KSI-IAM-MFA style outcome
-        fedramp_20x_mfa = mfa_required and users_without_mfa == 0 and phishing_resistant and not sms_phone_usage
+        # FedRAMP 2026 KSI-IAM-APM heuristic
+        fedramp_apm = mfa_required and users_without_mfa == 0 and phishing_resistant and not sms_phone_usage
         fedramp_legacy = mfa_required and users_without_mfa == 0
         
         f.write(f"CISA Directive 22-02: {'COMPLIANT ✅' if cisa_compliant else 'NON-COMPLIANT ❌'}\n")
         f.write(f"NIST SP 800-63B: {nist_aal}\n")
-        f.write(f"FedRAMP 20x KSI-IAM (MFA/APM heuristic): {'FAVORABLE ✅' if fedramp_20x_mfa else 'GAPS ❌'}\n")
+        f.write(f"FedRAMP 2026 KSI-IAM-APM (Duo heuristic): {'FAVORABLE ✅' if fedramp_apm else 'GAPS ❌'}\n")
         f.write(f"Legacy FedRAMP MFA baseline: {'BASELINE ✅' if fedramp_legacy else 'NON-COMPLIANT ❌'}\n\n")
         
         f.write("PRIORITY RECOMMENDATIONS\n")
@@ -1275,25 +1290,22 @@ def generate_compliance_checklist(output_dir: str) -> None:
         f.write("================================\n")
         f.write(f"Date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
         
-        f.write("FEDRAMP 20x KEY SECURITY INDICATORS (IAM — DUO-FOCUSED)\n")
-        f.write("-------------------------------------------------------\n")
-        f.write("[ ] KSI-IAM-MFA: Phishing-resistant MFA enforced for user authentication\n")
-        f.write("    - Global MFA required; no unenrolled users for in-scope populations\n")
-        f.write("    - FIDO2/WebAuthn, PIV/CAC, or equivalent preferred over SMS/push alone\n\n")
-        f.write("[ ] KSI-IAM-APM: Passwordless / strong authenticator methods\n")
-        f.write("    - Prefer passwordless; otherwise strong secrets + phishing-resistant MFA\n")
-        f.write("    - SMS/voice OTP phased out for privileged and federal workloads\n\n")
-        f.write("[ ] KSI-IAM-ELP: Least privilege for Duo administrators\n")
-        f.write("    - Minimal Owner/Admin accounts; scoped roles for operations\n")
-        f.write("    - Persistent review of privileged roles (20x 'persistently')\n\n")
-        f.write("[ ] KSI-IAM-AAM: Account lifecycle automation readiness\n")
-        f.write("    - Enrollment and admin exports available for scheduled validation\n")
-        f.write("    - Evidence artifacts retained (JSON + reports from this tool)\n\n")
-        f.write("[ ] KSI-IAM-SNU: Secure non-user / integration authentication\n")
-        f.write("    - Admin API integrations inventoried; keys rotated; least privilege ikey\n\n")
-        f.write("[ ] KSI-IAM-SUS: Privileged session / suspicious activity readiness\n")
-        f.write("    - Session lifetime tuned; admin and auth logs monitored continuously\n\n")
-        f.write("See: https://preview.fedramp.gov/2026/providers/20x/key-security-indicators/identity-and-access-management/\n\n")
+        f.write("FEDRAMP 2026 KSI-IAM (OFFICIAL IDs — FedRAMP/2026-markdown)\n")
+        f.write("------------------------------------------------------------\n")
+        f.write("[ ] KSI-IAM-AAM: Automating Account Management\n")
+        f.write("    - Account/role/group lifecycle privileges managed with automation\n\n")
+        f.write("[ ] KSI-IAM-APM: Adopting Passwordless Methods\n")
+        f.write("    - Passwordless when feasible; else strong passwords + phishing-resistant MFA\n")
+        f.write("    - No separate KSI-IAM-MFA ID in Consolidated Rules 2026\n\n")
+        f.write("[ ] KSI-IAM-ELP: Ensuring Least Privilege\n")
+        f.write("    - Persistently ensure users/devices only access needed resources\n\n")
+        f.write("[ ] KSI-IAM-JIT: Authorizing Just-in-Time\n")
+        f.write("    - Role/attribute-based JIT for user and non-user accounts (IdP/PAM)\n\n")
+        f.write("[ ] KSI-IAM-SNU: Securing Non-User Authentication\n")
+        f.write("    - Secure auth for integrations/services; keys rotated\n\n")
+        f.write("[ ] KSI-IAM-SUS: Responding to Suspicious Activity\n")
+        f.write("    - Privileged accounts disabled/secured when suspicious activity is detected\n\n")
+        f.write("Source: https://github.com/FedRAMP/2026-markdown/blob/main/providers/20x/key-security-indicators/identity-and-access-management.md\n\n")
 
         f.write("LEGACY FEDRAMP / SP 800-53 REV 5 CONTROL THEMES (STILL USEFUL)\n")
         f.write("------------------------------------------------------------\n")
