@@ -65,7 +65,7 @@ except ImportError:
     HAS_TABULATE = False
 
 # Script version information
-SCRIPT_VERSION = "1.2.1"
+SCRIPT_VERSION = "1.3.0"
 SCRIPT_DATE = "2026-06-25"
 
 # Official FedRAMP Consolidated Rules for 2026 — KSI-IAM identifiers and outcome text.
@@ -118,6 +118,26 @@ FEDRAMP_2026_MARKDOWN_KSI_INDEX = (
     "providers/20x/key-security-indicators/index.md"
 )
 FEDRAMP_2026_MARKDOWN_REPO = "https://github.com/FedRAMP/2026-markdown"
+
+# Pinned revision of FedRAMP/2026-markdown used for KSI ID/outcome text in this release.
+# Refresh: GET https://api.github.com/repos/FedRAMP/2026-markdown/commits/main
+FEDRAMP_2026_MARKDOWN_PIN = {
+    "repository": "https://github.com/FedRAMP/2026-markdown",
+    "ref": "main",
+    "commit_sha": "ea5e4cbd2cef45256276a882060de96cc507cda3",
+    "commit_date_utc": "2026-06-26T01:21:53Z",
+    "iam_path": "providers/20x/key-security-indicators/identity-and-access-management.md",
+    "tree_url": (
+        "https://github.com/FedRAMP/2026-markdown/tree/"
+        "ea5e4cbd2cef45256276a882060de96cc507cda3"
+    ),
+    "iam_blob_url": (
+        "https://github.com/FedRAMP/2026-markdown/blob/"
+        "ea5e4cbd2cef45256276a882060de96cc507cda3/"
+        "providers/20x/key-security-indicators/identity-and-access-management.md"
+    ),
+}
+
 
 # API Rate limiting settings
 MAX_RETRIES = 3
@@ -753,7 +773,54 @@ def _assess_fedramp_20x_signals(
     elp_ok = admin_count > 0 and has_separation
     jit_ok = None  # requires IdP/PAM evidence
     snu_ok = None  # inventory only — human attests integration hardening
-    sus_ok = None  # automated disable on suspicious activity not in Admin API
+
+    # KSI-IAM-SUS weak inputs from administrator logs (never auto-pass)
+    admin_logs = duo_data.get("admin_logs", []) or []
+    if isinstance(admin_logs, dict):
+        for key in ("adminlogs", "administrator_log", "logs", "items"):
+            if key in admin_logs and isinstance(admin_logs[key], list):
+                admin_logs = admin_logs[key]
+                break
+        else:
+            admin_logs = []
+    sus_action_keywords = (
+        "disable", "disabled", "delete", "deleted", "lock", "locked",
+        "suspend", "suspended", "revoke", "revoked", "remove", "removed",
+        "block", "blocked", "deactivate", "deactivated",
+    )
+    sus_signal_keywords = (
+        "fail", "failed", "denied", "fraud", "suspicious", "anomaly",
+        "brute", "lockout", "unauthorized", "risk",
+    )
+    disable_like_events = 0
+    suspicious_signal_events = 0
+    admin_log_sample_actions = []
+    for entry in admin_logs if isinstance(admin_logs, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        blob = " ".join(
+            str(entry.get(k, ""))
+            for k in ("action", "description", "object", "message", "type", "activity")
+        ).lower()
+        if any(k in blob for k in sus_action_keywords):
+            disable_like_events += 1
+        if any(k in blob for k in sus_signal_keywords):
+            suspicious_signal_events += 1
+        act = entry.get("action") or entry.get("description") or entry.get("type")
+        if act and len(admin_log_sample_actions) < 8:
+            admin_log_sample_actions.append(str(act)[:120])
+
+    admin_logs_count = len(admin_logs) if isinstance(admin_logs, list) else 0
+    sus_evidence = {
+        "admin_activity_logs_available_via_api": True,
+        "admin_log_entries_collected": admin_logs_count,
+        "disable_or_revoke_like_admin_actions_observed": disable_like_events,
+        "suspicious_or_failure_signal_strings_in_admin_logs": suspicious_signal_events,
+        "sample_admin_actions": admin_log_sample_actions,
+        "automated_disable_on_suspicious_activity_not_verified": True,
+        "weak_input_only": True,
+    }
+    sus_ok = None  # never pass on logs alone
 
     catalog = {row[0]: (row[1], row[2]) for row in FEDRAMP_2026_KSI_IAM}
 
@@ -841,17 +908,20 @@ def _assess_fedramp_20x_signals(
             "title": catalog["KSI-IAM-SUS"][0],
             "official_outcome": catalog["KSI-IAM-SUS"][1],
             "status": outcome(sus_ok),
-            "evidence": {
-                "admin_activity_logs_available_via_api": True,
-                "automated_disable_on_suspicious_activity_not_verified": True,
-            },
+            "evidence": sus_evidence,
             "notes": (
                 "Official KSI: privileged accounts disabled or secured in response to suspicious activity "
-                "(not merely session timeout). Confirm SOAR/IdP/Duo admin procedures; this scan cannot prove response."
+                "(not merely session timeout). Admin API logs are weak inputs only (visibility / disable-like "
+                "actions); they do NOT prove automated response. Status stays unknown without SOAR/IdP attestation."
             ),
             "source": FEDRAMP_2026_MARKDOWN_IAM,
         },
     }
+
+    pinned_iam = FEDRAMP_2026_MARKDOWN_PIN.get("iam_blob_url", FEDRAMP_2026_MARKDOWN_IAM)
+    for _kid, _meta in ksi_results.items():
+        _meta["source"] = pinned_iam
+        _meta["ruleset_commit_sha"] = FEDRAMP_2026_MARKDOWN_PIN.get("commit_sha")
 
     legacy = {
         "admin_count_reasonable": admin_count <= 5,
@@ -869,19 +939,107 @@ def _assess_fedramp_20x_signals(
             "(Consolidated Rules launch noted 2026-06-24 in that source). Phase One pilot materials and "
             "RFC-0006 are historical and are not the primary indicator list."
         ),
+        "ruleset_provenance": dict(FEDRAMP_2026_MARKDOWN_PIN),
         "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "tool_version": SCRIPT_VERSION,
         "ksi_results": ksi_results,
         "legacy_signals": legacy,
         "references": [
             FEDRAMP_2026_MARKDOWN_REPO,
-            FEDRAMP_2026_MARKDOWN_IAM,
-            FEDRAMP_2026_MARKDOWN_KSI_INDEX,
+            FEDRAMP_2026_MARKDOWN_PIN.get("iam_blob_url", FEDRAMP_2026_MARKDOWN_IAM),
+            FEDRAMP_2026_MARKDOWN_PIN.get("tree_url", FEDRAMP_2026_MARKDOWN_KSI_INDEX),
             "https://github.com/FedRAMP/2026-markdown/blob/main/reference/key-security-indicators.md",
             "https://duo.com/docs/duo-federal-guide",
         ],
     }
 
+
+
+
+def generate_ksi_security_decision_record_stubs(
+    duo_data: Dict[str, Any],
+    output_dir: str,
+    auth_analysis: Optional[Dict[str, Any]] = None,
+    user_analysis: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Write Security Decision Record (SDR) markdown stubs per official KSI-IAM.
+
+    FedRAMP 2026 KSI guidance expects outcome-oriented documentation (how activities
+    are performed, measured, and evidenced). Stubs pre-fill Duo-derived fields and
+    leave attestation blanks for assurance engineering.
+    """
+    assessment = _assess_fedramp_20x_signals(duo_data, auth_analysis, user_analysis)
+    sdr_dir = os.path.join(output_dir, "compliance_reports", "security_decision_records")
+    os.makedirs(sdr_dir, exist_ok=True)
+    pin = assessment.get("ruleset_provenance") or dict(FEDRAMP_2026_MARKDOWN_PIN)
+    sha = pin.get("commit_sha", "")
+    index_lines = [
+        "# Security Decision Records — KSI-IAM (Duo-supporting)",
+        "",
+        f"Generated: {assessment.get('generated_at')}",
+        f"Tool version: {assessment.get('tool_version')}",
+        f"Ruleset commit: `{sha}` ({pin.get('commit_date_utc')})",
+        f"Ruleset tree: {pin.get('tree_url')}",
+        "",
+        "Complete blanks with assurance engineering. FedRAMP/2026-markdown is the indicator source.",
+        "",
+        "| KSI | Status (tool heuristic) | SDR |",
+        "|-----|-------------------------|-----|",
+    ]
+
+    for ksi_id, meta in assessment.get("ksi_results", {}).items():
+        status = meta.get("status", "unknown")
+        title = meta.get("title", ksi_id)
+        outcome_text = meta.get("official_outcome", "")
+        notes = meta.get("notes", "")
+        evidence = meta.get("evidence") or {}
+        fname = f"{ksi_id}.md"
+        fpath = os.path.join(sdr_dir, fname)
+        evidence_md = "\n".join(f"- `{k}`: `{v}`" for k, v in evidence.items())
+        body = f"""# Security Decision Record — {ksi_id}
+
+## Indicator
+- **ID:** {ksi_id}
+- **Title:** {title}
+- **Official outcome (FedRAMP/2026-markdown @{sha[:12]}):**
+  > {outcome_text}
+- **Source blob:** {pin.get('iam_blob_url')}
+
+## Tool heuristic (not certification)
+- **Status from duo-audit:** `{status}`
+- **Assessment notes:** {notes}
+
+## Pre-filled Duo evidence (from this run)
+{evidence_md or '_None collected._'}
+
+## Assurance prompts (complete for 2026 KSI program)
+1. **How** are the activities that produce this outcome performed (people, systems, automation)?
+2. **Where** in the tech or policy stack do they exist (Duo, IdP, PAM, HRIS, SOAR, etc.)?
+3. **What** is measured or reported today related to these activities? Desired metrics?
+4. **Why** gaps exist if activities or metrics are missing?
+5. **When** do activities and measurements occur (cadence)?
+6. **Where** are monitoring data sources (APIs, SIEM, tickets)?
+
+## Attestations (owner / date)
+- [ ] Outcome implemented for in-scope populations: _______________ (owner) ________ (date)
+- [ ] Evidence regenerable on demand / schedule: _______________
+- [ ] Customer-facing metrics for agency assurance package: _______________
+
+## Linked artifacts from this assessment
+- `../fedramp_20x_ksi_evidence.json`
+- `../fedramp_compliance_report.txt`
+
+## Residual risk / exceptions
+_Document deviations, compensating controls, and inheritance from Duo Federal authorization._
+"""
+        with open(fpath, "w") as fh:
+            fh.write(body)
+        index_lines.append(f"| `{ksi_id}` | `{status}` | [{fname}](./{fname}) |")
+
+    index_path = os.path.join(sdr_dir, "README.md")
+    with open(index_path, "w") as fh:
+        fh.write("\n".join(index_lines) + "\n")
+    return sdr_dir
 
 
 def generate_fedramp_20x_ksi_json(
@@ -1390,6 +1548,11 @@ def analyze_compliance(duo_data: Dict[str, Any], output_dir: str) -> None:
 
     ksi_path = generate_fedramp_20x_ksi_json(duo_data, output_dir, auth_analysis, user_analysis)
     print(f"  - {Fore.GREEN}FedRAMP 20x KSI evidence JSON: {ksi_path}")
+
+    sdr_dir = generate_ksi_security_decision_record_stubs(
+        duo_data, output_dir, auth_analysis, user_analysis
+    )
+    print(f"  - {Fore.GREEN}KSI-IAM Security Decision Record stubs: {sdr_dir}")
     
     generate_user_report(user_analysis, output_dir)
     print(f"  - {Fore.GREEN}User enrollment report generated")
@@ -1479,6 +1642,7 @@ def main():
     print(f"- {output_dir}/compliance_reports/nist_compliance_report.txt")
     print(f"- {output_dir}/compliance_reports/fedramp_compliance_report.txt")
     print(f"- {output_dir}/compliance_reports/fedramp_20x_ksi_evidence.json")
+    print(f"- {output_dir}/compliance_reports/security_decision_records/ (KSI-IAM SDR stubs)")
     print("====================================================")
 
 if __name__ == "__main__":
