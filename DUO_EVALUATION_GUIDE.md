@@ -177,16 +177,18 @@ curl -s -u "${DUO_INTEGRATION_KEY}:${DUO_SECRET_KEY}" \
   "https://${DUO_API_HOSTNAME}/admin/v1/administrator_log?limit=1000" | jq . > admin_logs.json
 ```
 
-### FedRAMP 20x KSI-IAM Checklist (Duo-focused)
+### FedRAMP 2026 KSI-IAM Checklist (official IDs — Duo-supporting evidence)
 
-- [ ] **KSI-IAM-MFA** — Phishing-resistant MFA enforced; no unenrolled in-scope users
-- [ ] **KSI-IAM-APM** — Passwordless / strong authenticators preferred; SMS/voice phased out
-- [ ] **KSI-IAM-ELP** — Duo admin roles least-privileged and reviewed persistently
-- [ ] **KSI-IAM-AAM** — Enrollment/admin exports automated on a schedule (evidence retained)
-- [ ] **KSI-IAM-SNU** — Admin API integrations and secrets inventoried and rotated
-- [ ] **KSI-IAM-SUS** — Session lifetime tuned; privileged activity logs monitored
+Source: [FedRAMP/2026-markdown IAM KSIs](https://github.com/FedRAMP/2026-markdown/blob/main/providers/20x/key-security-indicators/identity-and-access-management.md)
 
-References: [FedRAMP RFC-0006](https://www.fedramp.gov/rfcs/0006/), [IAM KSIs (preview)](https://preview.fedramp.gov/2026/providers/20x/key-security-indicators/identity-and-access-management/)
+- [ ] **KSI-IAM-AAM** — Account/role/group lifecycle privileges managed with automation
+- [ ] **KSI-IAM-APM** — Passwordless when feasible; else strong passwords + phishing-resistant MFA (no separate MFA KSI ID)
+- [ ] **KSI-IAM-ELP** — Persistently ensure least privilege (users/devices only access needed resources)
+- [ ] **KSI-IAM-JIT** — Role/attribute-based just-in-time authorization (primarily IdP/PAM)
+- [ ] **KSI-IAM-SNU** — Secure authentication for non-user accounts/services, persistently reviewed
+- [ ] **KSI-IAM-SUS** — Privileged accounts disabled/secured in response to suspicious activity
+
+Also: [2026-markdown repo](https://github.com/FedRAMP/2026-markdown), [KSI index](https://github.com/FedRAMP/2026-markdown/blob/main/providers/20x/key-security-indicators/index.md)
 
 ### Legacy FedRAMP / SP 800-53 Requirements Checklist
 - [ ] Administrator accounts are limited and follow least privilege

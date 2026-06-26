@@ -65,19 +65,59 @@ except ImportError:
     HAS_TABULATE = False
 
 # Script version information
-SCRIPT_VERSION = "1.2.0"
+SCRIPT_VERSION = "1.2.1"
 SCRIPT_DATE = "2026-06-25"
 
-# FedRAMP 20x KSI references for IAM outcomes observable via Duo Admin API / config
-# (official indicators evolve; map assessments to current public KSI themes)
-FEDRAMP_20X_KSI_IAM = (
-    ("KSI-IAM-MFA", "Phishing-resistant multi-factor authentication enforced for users"),
-    ("KSI-IAM-APM", "Passwordless / strong authenticator methods preferred over SMS/phone"),
-    ("KSI-IAM-ELP", "Least privilege and role separation for privileged Duo administrators"),
-    ("KSI-IAM-AAM", "Account lifecycle signals (enrollment, status, admin roles) available for automation"),
-    ("KSI-IAM-SNU", "Non-user / integration authentication surfaces reviewed (API integrations)"),
-    ("KSI-IAM-SUS", "Privileged access and session posture can be monitored (logs + session settings)"),
+# Official FedRAMP Consolidated Rules for 2026 — KSI-IAM identifiers and outcome text.
+# Source of truth: https://github.com/FedRAMP/2026-markdown
+#   providers/20x/key-security-indicators/identity-and-access-management.md
+# (machine-generated from FedRAMP Machine-Readable Rules; launched 2026-06-24 in that corpus)
+FEDRAMP_2026_KSI_IAM = (
+    (
+        "KSI-IAM-AAM",
+        "Automating Account Management",
+        "The lifecycle and privileges of all accounts, roles, and groups are securely managed using automation.",
+    ),
+    (
+        "KSI-IAM-APM",
+        "Adopting Passwordless Methods",
+        "Secure passwordless methods are used for user authentication and authorization when feasible, "
+        "otherwise strong passwords with phishing-resistant MFA is used.",
+    ),
+    (
+        "KSI-IAM-ELP",
+        "Ensuring Least Privilege",
+        "Identity and access management measures are used and persistently reviewed to ensure each user "
+        "or device can only access the resources they need.",
+    ),
+    (
+        "KSI-IAM-JIT",
+        "Authorizing Just-in-Time",
+        "A least-privileged, role and attribute-based, and just-in-time security authorization model is "
+        "used and persistently reviewed for all user and non-user accounts and services.",
+    ),
+    (
+        "KSI-IAM-SNU",
+        "Securing Non-User Authentication",
+        "Appropriately secure authentication methods are used and persistently reviewed for non-user "
+        "accounts and services.",
+    ),
+    (
+        "KSI-IAM-SUS",
+        "Responding to Suspicious Activity",
+        "Accounts with privileged access are disabled or otherwise secured in response to suspicious activity.",
+    ),
 )
+
+FEDRAMP_2026_MARKDOWN_IAM = (
+    "https://github.com/FedRAMP/2026-markdown/blob/main/"
+    "providers/20x/key-security-indicators/identity-and-access-management.md"
+)
+FEDRAMP_2026_MARKDOWN_KSI_INDEX = (
+    "https://github.com/FedRAMP/2026-markdown/blob/main/"
+    "providers/20x/key-security-indicators/index.md"
+)
+FEDRAMP_2026_MARKDOWN_REPO = "https://github.com/FedRAMP/2026-markdown"
 
 # API Rate limiting settings
 MAX_RETRIES = 3
@@ -632,7 +672,15 @@ def _assess_fedramp_20x_signals(
     auth_analysis: Optional[Dict[str, Any]] = None,
     user_analysis: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Derive FedRAMP 20x–oriented IAM signals from collected Duo data."""
+    """Map Duo Admin API signals to official FedRAMP 2026 KSI-IAM indicators.
+
+    Indicator IDs and outcome statements match FedRAMP/2026-markdown
+    ``providers/20x/key-security-indicators/identity-and-access-management.md``.
+
+    Status values are supporting evidence heuristics for agency/CSP assurance
+    engineering—not a FedRAMP certification decision. Many KSIs require org-wide
+    processes beyond Duo (especially JIT and SUS response automation).
+    """
     admins = duo_data.get("admins", []) or []
     settings = duo_data.get("settings", {}) or {}
     integrations = duo_data.get("integrations", []) or []
@@ -676,7 +724,6 @@ def _assess_fedramp_20x_signals(
     device_trust = safe_get(trusted_endpoints, "enabled", None) if isinstance(trusted_endpoints, dict) else None
     integration_count = len(integrations) if isinstance(integrations, list) else 0
 
-    # KSI-style outcomes (pass / fail / unknown) for continuous-evidence packaging
     def outcome(ok: Optional[bool]) -> str:
         if ok is True:
             return "pass"
@@ -684,68 +731,128 @@ def _assess_fedramp_20x_signals(
             return "fail"
         return "unknown"
 
+    # KSI-IAM-APM: passwordless when feasible, else strong passwords + phishing-resistant MFA.
+    # Duo cannot prove org-wide passwordless; proxy via phishing-resistant factors + MFA policy.
+    apm_ok: Optional[bool] = None
+    if auth_analysis is not None and user_analysis is not None:
+        apm_ok = (
+            mfa_required
+            and users_without_mfa == 0
+            and phishing_resistant
+            and not sms_phone_usage
+        )
+    elif auth_analysis is not None:
+        if not phishing_resistant or sms_phone_usage:
+            apm_ok = False
+        elif mfa_required:
+            apm_ok = True
+        else:
+            apm_ok = False
+
+    aam_ok = user_analysis is not None
+    elp_ok = admin_count > 0 and has_separation
+    jit_ok = None  # requires IdP/PAM evidence
+    snu_ok = None  # inventory only — human attests integration hardening
+    sus_ok = None  # automated disable on suspicious activity not in Admin API
+
+    catalog = {row[0]: (row[1], row[2]) for row in FEDRAMP_2026_KSI_IAM}
+
     ksi_results = {
-        "KSI-IAM-MFA": {
-            "title": "Phishing-resistant MFA posture",
-            "status": outcome(
-                phishing_resistant and mfa_required and (users_without_mfa == 0 if users_without_mfa is not None else None)
-                if auth_analysis is not None
-                else (mfa_required if mfa_required else None)
+        "KSI-IAM-AAM": {
+            "title": catalog["KSI-IAM-AAM"][0],
+            "official_outcome": catalog["KSI-IAM-AAM"][1],
+            "status": outcome(aam_ok),
+            "evidence": {
+                "admin_api_admins_exported": admin_count,
+                "user_enrollment_export_available": user_analysis is not None,
+                "supports_scheduled_regeneration": True,
+            },
+            "notes": (
+                "Official KSI (2026-markdown): lifecycle/privileges of accounts, roles, and groups managed "
+                "using automation. This tool only evidences whether Duo Admin API exports can feed automated "
+                "collection; complete AAM with HR/IdP provisioning and scheduled runs."
             ),
+            "source": FEDRAMP_2026_MARKDOWN_IAM,
+        },
+        "KSI-IAM-APM": {
+            "title": catalog["KSI-IAM-APM"][0],
+            "official_outcome": catalog["KSI-IAM-APM"][1],
+            "status": outcome(apm_ok),
             "evidence": {
                 "mfa_required_policy": mfa_required,
                 "phishing_resistant_methods_observed": phishing_resistant,
+                "sms_or_phone_methods_observed": sms_phone_usage,
                 "users_without_mfa": users_without_mfa,
             },
-            "notes": "FedRAMP 20x prioritizes phishing-resistant MFA (FIDO2/WebAuthn, PIV/CAC) over SMS/push/TOTP alone.",
-        },
-        "KSI-IAM-APM": {
-            "title": "Passwordless / strong authenticator preference",
-            "status": outcome(phishing_resistant and not sms_phone_usage if auth_analysis is not None else None),
-            "evidence": {
-                "phishing_resistant_methods_observed": phishing_resistant,
-                "sms_or_phone_methods_observed": sms_phone_usage,
-            },
-            "notes": "Prefer passwordless / origin-bound authenticators; phase out SMS and voice OTP.",
+            "notes": (
+                "Official KSI (2026-markdown): passwordless when feasible, otherwise strong passwords with "
+                "phishing-resistant MFA. There is no KSI-IAM-MFA ID in Consolidated Rules 2026; phishing-resistant "
+                "MFA is part of APM. Duo proxy: FIDO2/WebAuthn/PIV signals, MFA required, SMS/voice not in use."
+            ),
+            "source": FEDRAMP_2026_MARKDOWN_IAM,
         },
         "KSI-IAM-ELP": {
-            "title": "Least privilege for Duo administrators",
-            "status": outcome(admin_count > 0 and has_separation and admin_count <= 10),
+            "title": catalog["KSI-IAM-ELP"][0],
+            "official_outcome": catalog["KSI-IAM-ELP"][1],
+            "status": outcome(elp_ok),
             "evidence": {
                 "admin_count": admin_count,
                 "distinct_admin_roles": sorted(admin_roles),
                 "role_separation": has_separation,
+                "session_timeout_seconds": timeout_seconds,
+                "session_timeout_within_30m_heuristic": session_ok,
             },
-            "notes": "Limit Owner/Admin roles; prefer scoped roles (Help Desk, User Manager, etc.).",
+            "notes": (
+                "Official KSI: persistently ensure users/devices only access needed resources. Duo-visible slice: "
+                "admin role separation and privileged admin count. Session lifetime is supporting evidence "
+                "(related controls include AC-12), not a substitute for org-wide least privilege."
+            ),
+            "source": FEDRAMP_2026_MARKDOWN_IAM,
         },
-        "KSI-IAM-AAM": {
-            "title": "Account lifecycle signals for automation",
-            "status": "pass" if admin_count >= 0 else "unknown",
+        "KSI-IAM-JIT": {
+            "title": catalog["KSI-IAM-JIT"][0],
+            "official_outcome": catalog["KSI-IAM-JIT"][1],
+            "status": outcome(jit_ok),
             "evidence": {
-                "admin_api_admins_exported": admin_count,
-                "user_enrollment_export_available": user_analysis is not None,
+                "duo_admin_roles_observed": sorted(admin_roles),
+                "jit_model_not_exposed_by_duo_admin_api": True,
             },
-            "notes": "20x expects persistent, automatable validation; re-run this tool on a schedule and retain JSON evidence.",
+            "notes": (
+                "Official KSI: least-privileged, role/attribute-based, just-in-time authorization, persistently "
+                "reviewed. Document JIT in IdP/PAM/Security Decision Record; Duo Admin API cannot fully prove JIT."
+            ),
+            "source": FEDRAMP_2026_MARKDOWN_IAM,
         },
         "KSI-IAM-SNU": {
-            "title": "Non-user / integration authentication surfaces",
-            "status": outcome(integration_count >= 0),
-            "evidence": {"integration_count": integration_count},
-            "notes": "Review Admin API integrations and application secrets; rotate keys; least privilege on Admin API ikey.",
+            "title": catalog["KSI-IAM-SNU"][0],
+            "official_outcome": catalog["KSI-IAM-SNU"][1],
+            "status": outcome(snu_ok),
+            "evidence": {
+                "integration_count": integration_count,
+                "admin_api_used_for_this_assessment": True,
+            },
+            "notes": (
+                "Official KSI: secure authentication for non-user accounts and services, persistently reviewed. "
+                "Inventory integrations and attest key rotation / machine auth; inventory alone is not a pass."
+            ),
+            "source": FEDRAMP_2026_MARKDOWN_IAM,
         },
         "KSI-IAM-SUS": {
-            "title": "Session and privileged access monitoring readiness",
-            "status": outcome(session_ok),
+            "title": catalog["KSI-IAM-SUS"][0],
+            "official_outcome": catalog["KSI-IAM-SUS"][1],
+            "status": outcome(sus_ok),
             "evidence": {
-                "auth_lifetime_seconds": timeout_seconds,
-                "session_timeout_within_30m": session_ok,
-                "admin_activity_logs_via_api": True,
+                "admin_activity_logs_available_via_api": True,
+                "automated_disable_on_suspicious_activity_not_verified": True,
             },
-            "notes": "Tune session lifetime; monitor admin and auth logs continuously (20x 'persistent' validation).",
+            "notes": (
+                "Official KSI: privileged accounts disabled or secured in response to suspicious activity "
+                "(not merely session timeout). Confirm SOAR/IdP/Duo admin procedures; this scan cannot prove response."
+            ),
+            "source": FEDRAMP_2026_MARKDOWN_IAM,
         },
     }
 
-    # Legacy Rev5-oriented signals retained for hybrid programs
     legacy = {
         "admin_count_reasonable": admin_count <= 5,
         "admin_role_separation": has_separation,
@@ -756,17 +863,25 @@ def _assess_fedramp_20x_signals(
     }
 
     return {
-        "framework": "FedRAMP 20x (KSI-IAM themes) + legacy FedRAMP / SP 800-53 Rev 5 themes",
+        "framework": "FedRAMP Consolidated Rules for 2026 (20x KSI-IAM) — FedRAMP/2026-markdown",
+        "ruleset_note": (
+            "Indicator IDs and outcome quotes are from the FedRAMP 2026 markdown corpus "
+            "(Consolidated Rules launch noted 2026-06-24 in that source). Phase One pilot materials and "
+            "RFC-0006 are historical and are not the primary indicator list."
+        ),
         "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "tool_version": SCRIPT_VERSION,
         "ksi_results": ksi_results,
         "legacy_signals": legacy,
         "references": [
-            "https://www.fedramp.gov/rfcs/0006/",
-            "https://preview.fedramp.gov/2026/providers/20x/key-security-indicators/identity-and-access-management/",
+            FEDRAMP_2026_MARKDOWN_REPO,
+            FEDRAMP_2026_MARKDOWN_IAM,
+            FEDRAMP_2026_MARKDOWN_KSI_INDEX,
+            "https://github.com/FedRAMP/2026-markdown/blob/main/reference/key-security-indicators.md",
             "https://duo.com/docs/duo-federal-guide",
         ],
     }
+
 
 
 def generate_fedramp_20x_ksi_json(
